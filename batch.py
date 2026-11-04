@@ -71,6 +71,24 @@ def results_table(compounds: list[Compound]) -> list[dict]:
     return [analyse(c) for c in compounds]
 
 
+def all_atom_rows(compounds: list[Compound], include_s_and_p: bool = False) -> list[dict]:
+    """Per-atom LogP + TPSA for every compound in one long table (one row per atom)."""
+    out = []
+    for c in compounds:
+        for r in core.combined_contribution_table(c.mol, include_s_and_p=include_s_and_p):
+            out.append({"Cpd": c.number, "Name": c.name, **r})
+    return out
+
+
+EGG_COLUMNS = ["Cpd", "Name", "SMILES", "LogP (WLOGP)", "TPSA (Å²)", "Egg region",
+               "GI absorption", "BBB permeant"]
+
+
+def egg_rows(rows: list[dict]) -> list[dict]:
+    """The BOILED-Egg table: coordinates, region and predictions for each compound."""
+    return [{k: r[k] for k in EGG_COLUMNS} for r in rows]
+
+
 def _csv(rows: list[dict]) -> str:
     if not rows:
         return ""
@@ -91,9 +109,11 @@ def build_zip(compounds: list[Compound], rows: list[dict], render_kwargs: dict,
     """
     ZIP layout:
       summary_results.csv
+      all_compounds_atom_contributions.csv   (per-atom LogP + TPSA, every compound)
+      boiled_egg_table.csv
       boiled_egg_all_compounds.png
-      cpd_001_<name>/  logp_map.png, tpsa_map.png, logp_contributions.csv,
-                       tpsa_contributions.csv, lipinski_ro5.csv, boiled_egg.png
+      cpd_001_<name>/  logp_map.png, tpsa_map.png, atom_contributions.csv (LogP + TPSA),
+                       lipinski_ro5.csv, boiled_egg.png
     `render_kwargs` are passed to core.render_figure (style, size, ...). Use
     'vmax_logp' / 'vmax_tpsa' keys for the fixed colour scales (None = relative).
     `progress(i, n)` is called after each compound.
@@ -106,6 +126,9 @@ def build_zip(compounds: list[Compound], rows: list[dict], render_kwargs: dict,
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
         z.writestr("summary_results.csv", _csv(rows))
+        z.writestr("all_compounds_atom_contributions.csv",
+                   _csv(all_atom_rows(compounds, include_s_and_p=tpsa_include_sp)))
+        z.writestr("boiled_egg_table.csv", _csv(egg_rows(rows)))
         z.writestr("boiled_egg_all_compounds.png", boiled_egg.plot_many(
             [(r["Cpd"], r["LogP (WLOGP)"], r["TPSA (Å²)"]) for r in rows]))
 
@@ -120,7 +143,8 @@ def build_zip(compounds: list[Compound], rows: list[dict], render_kwargs: dict,
                 title = f"{cpd.label} – {core.default_title(res)}"
                 z.writestr(f"{folder}/{stem}_map.png",
                            core.render_figure(res, title=title, vmax=vmax, **kw))
-                z.writestr(f"{folder}/{stem}_contributions.csv", _csv(core.contribution_table(res)))
+            z.writestr(f"{folder}/atom_contributions.csv",
+                       _csv(core.combined_contribution_table(mol, include_s_and_p=tpsa_include_sp)))
 
             s = core.molecule_summary(mol)
             ro5_rows, ro5 = core.lipinski_rule_of_five(s)

@@ -567,6 +567,27 @@ def render_figure(result: AtomContribResult, title: str | None = None,
     return buf.getvalue()
 
 
+LOGP_COL = "LogP contribution"
+TPSA_COL = "TPSA contribution (Å²)"
+
+
+def combined_contribution_table(mol: Chem.Mol, include_s_and_p: bool = False) -> list[dict]:
+    """Per-atom LogP and TPSA contributions side by side (same atom order)."""
+    lr = compute_logp_contributions(mol)
+    tr = compute_tpsa_contributions(mol, include_s_and_p=include_s_and_p)
+    rows = []
+    for atom, lc, tc in zip(lr.mol.GetAtoms(), lr.contributions, tr.contributions):
+        rows.append({
+            "Atom index": atom.GetIdx(),
+            "Element": atom.GetSymbol(),
+            "Attached H": atom.GetTotalNumHs(),
+            "Aromatic": atom.GetIsAromatic(),
+            LOGP_COL: round(lc, 3),
+            TPSA_COL: round(tc, 3),
+        })
+    return rows
+
+
 def default_title(result: AtomContribResult) -> str:
     info = result.info
     return f"{info['title']} = {info['total_fmt'].format(result.total)}{info['unit']}"

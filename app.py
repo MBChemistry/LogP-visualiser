@@ -142,20 +142,29 @@ def show_atom_map(mol, view, title_prefix, file_stem, key):
                            mime="image/png", key=f"png_{key}_{view}")
     with col_info:
         st.code(res.smiles, language=None)
-        df = pd.DataFrame(core.contribution_table(res))
-        col = df.columns[-1]
-        cmap, norm, _ = core.colour_scale(res, vmax)
-        st.subheader("Per-atom contributions")
-        st.dataframe(
-            df.style.background_gradient(subset=[col], cmap=cmap, vmin=norm.vmin, vmax=norm.vmax)
-            .format({col: "{:+.3f}" if res.info["diverging"] else "{:.2f}"}),
-            hide_index=True, width="stretch", height=400, key=f"atoms_{key}_{view}",
-        )
-        st.download_button("Download CSV", df.to_csv(index=False),
-                           file_name=f"{file_stem}_{view.lower()}_contributions.csv",
-                           key=f"csv_{key}_{view}")
-        st.caption(f"Sum of contributions = {sum(res.contributions):.3f}"
-                   f"{res.info['unit']} (= total {res.prop}).")
+        show_combined_atom_table(mol, file_stem, key=f"{key}_{view}")
+
+
+def show_combined_atom_table(mol, file_stem, key):
+    """Per-atom LogP and TPSA side by side, each coloured on its own scale."""
+    logp_res = core.compute_logp_contributions(mol)
+    tpsa_res = core.compute_tpsa_contributions(mol, include_s_and_p=tpsa_sp)
+    lcmap, lnorm, _ = core.colour_scale(logp_res, vmax_logp if fixed else None)
+    tcmap, tnorm, _ = core.colour_scale(tpsa_res, vmax_tpsa if fixed else None)
+
+    df = pd.DataFrame(core.combined_contribution_table(mol, include_s_and_p=tpsa_sp))
+    st.subheader("Per-atom contributions")
+    st.dataframe(
+        df.style
+        .background_gradient(subset=[core.LOGP_COL], cmap=lcmap, vmin=lnorm.vmin, vmax=lnorm.vmax)
+        .background_gradient(subset=[core.TPSA_COL], cmap=tcmap, vmin=tnorm.vmin, vmax=tnorm.vmax)
+        .format({core.LOGP_COL: "{:+.3f}", core.TPSA_COL: "{:.2f}"}),
+        hide_index=True, width="stretch", height=400, key=f"atoms_{key}",
+    )
+    st.download_button("Download LogP + TPSA per-atom CSV", df.to_csv(index=False),
+                       file_name=f"{file_stem}_atom_contributions.csv", key=f"csv_{key}")
+    st.caption(f"Totals: LogP = {sum(logp_res.contributions):.2f}, "
+               f"TPSA = {sum(tpsa_res.contributions):.1f} Å² (sums of the per-atom values).")
 
 
 EGG_LEGEND = (
@@ -263,6 +272,15 @@ def single_mode():
                  "white": "the **white** (GI absorption region) but outside the yolk",
                  "grey": "**outside the egg** (grey region)"}[pred["region"]]
         st.markdown(f"The molecule falls in {where}.")
+        egg_row = pd.DataFrame([{
+            "Name": name or "", "SMILES": Chem.MolToSmiles(mol),
+            "LogP (WLOGP)": round(summary["LogP"], 2), "TPSA (Å²)": round(summary["TPSA"], 2),
+            "Egg region": pred["region"],
+            "GI absorption": "High" if pred["hia"] else "Low",
+            "BBB permeant": "Yes" if pred["bbb"] else "No",
+        }])
+        st.download_button("Download BOILED-Egg values (CSV)", egg_row.to_csv(index=False),
+                           file_name="boiled_egg_values.csv", key="single_egg_csv")
         st.markdown(EGG_LEGEND)
         st.caption(EGG_REF)
 
@@ -274,6 +292,12 @@ def single_mode():
 def _results(smiles_and_names: tuple) -> list[dict]:
     cpds = [batch.Compound(i + 1, n, s) for i, (s, n) in enumerate(smiles_and_names)]
     return batch.results_table(cpds)
+
+
+@st.cache_data(show_spinner=False)
+def _atom_rows(smiles_and_names: tuple, include_sp: bool) -> list[dict]:
+    cpds = [batch.Compound(i + 1, n, s) for i, (s, n) in enumerate(smiles_and_names)]
+    return batch.all_atom_rows(cpds, include_s_and_p=include_sp)
 
 
 def batch_mode():
@@ -343,10 +367,16 @@ def batch_mode():
     st.caption(f"Lipinski pass: {n_ro5}/{len(rows)}   ·   High GI absorption: {n_gi}/{len(rows)}   ·   "
                f"BBB permeant: {n_bbb}/{len(rows)}")
 
-    d1, d2 = st.columns(2)
+    d1, d2, d3 = st.columns(3)
     d1.download_button("Download results table (CSV)", df.to_csv(index=False),
                        file_name="batch_results.csv", key="batch_csv")
-    with d2:
+    d2.download_button(
+        "Download per-atom LogP + TPSA, all compounds (CSV)",
+        pd.DataFrame(_atom_rows(tuple(data), tpsa_sp)).to_csv(index=False),
+        file_name="all_compounds_atom_contributions.csv", key="batch_atoms_csv",
+        help="One file, one row per atom: compound number, name, atom, LogP and TPSA contribution.",
+    )
+    with d3:
         kw = dict(RENDER, vmax_logp=vmax_logp if fixed else None,
                   vmax_tpsa=vmax_tpsa if fixed else None)
         sig = repr((sorted(kw.items()), tpsa_sp, tuple(data)))
@@ -407,11 +437,13 @@ def batch_mode():
         p1.metric("GI absorption", r["GI absorption"])
         p2.metric("BBB permeant", r["BBB permeant"])
         st.markdown("**All compounds**")
-        egg_df = pd.DataFrame(rows)[["Cpd", "Name", "LogP (WLOGP)", "TPSA (Å²)",
-                                     "GI absorption", "BBB permeant"]]
-        st.dataframe(egg_df.style.map(_pass_fail_style, subset=["GI absorption", "BBB permeant"])
+        egg_df = pd.DataFrame(batch.egg_rows(rows))
+        st.dataframe(egg_df.drop(columns=["SMILES"]).style
+                     .map(_pass_fail_style, subset=["GI absorption", "BBB permeant"])
                      .format({"LogP (WLOGP)": "{:.2f}", "TPSA (Å²)": "{:.1f}"}),
                      hide_index=True, width="stretch", key="egg_table")
+        st.download_button("Download BOILED-Egg table (CSV)", egg_df.to_csv(index=False),
+                           file_name="boiled_egg_table.csv", key="egg_table_dl")
         st.markdown(EGG_LEGEND)
         st.caption(EGG_REF)
 
