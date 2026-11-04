@@ -1,11 +1,15 @@
 # LogP Visualiser
 
-Calculate the lipophilicity (Wildman–Crippen LogP, via RDKit) of a molecule and see
-each atom's contribution drawn on the structure:
+Calculate the lipophilicity (Wildman–Crippen LogP) and topological polar surface area
+(Ertl TPSA) of a molecule with RDKit, and see each atom's contribution drawn on the
+structure. Switch between:
 
-- **Red** atoms increase LogP (lipophilic)
-- **Blue** atoms decrease LogP (hydrophilic)
-- Stronger colour = larger contribution
+- **LogP map**: red atoms increase LogP (lipophilic), blue atoms decrease it (hydrophilic)
+- **TPSA map**: darker blue = larger polar surface contribution (only N/O, optionally S/P)
+- **BOILED-Egg** (Daina & Zoete, 2016): WLOGP vs TPSA plot predicting passive
+  gastrointestinal absorption (white) and blood–brain barrier permeation (yolk)
+
+Stronger colour = larger contribution.
 
 Molecules can be **drawn** (Ketcher editor), typed as **SMILES / InChI**, or **uploaded**
 (`.mol`, `.sdf`, `.mol2`, `.pdb`, `.smi`). Hydrogen contributions are added to the heavy
@@ -28,6 +32,7 @@ The app opens in your browser at http://localhost:8501.
 ```bash
 python logp_core.py "CC(=O)Nc1ccc(O)cc1" -o paracetamol.png
 python logp_core.py molecule.sdf --style heatmap --vmax 1.0 -o out.png
+python logp_core.py "CC(=O)Nc1ccc(O)cc1" --property tpsa -o tpsa.png --egg egg.png
 ```
 
 ## Files
@@ -35,5 +40,7 @@ python logp_core.py molecule.sdf --style heatmap --vmax 1.0 -o out.png
 | File | Purpose |
 |------|---------|
 | `app.py` | Streamlit web interface |
-| `logp_core.py` | Parsing, LogP contributions and image rendering (also a CLI) |
+| `logp_core.py` | Parsing, LogP/TPSA contributions and image rendering (also a CLI) |
+| `boiled_egg.py` | BOILED-Egg ellipses, prediction and plot |
+| `packages.txt` | System libraries for Streamlit Community Cloud |
 | `requirements.txt` | Python dependencies |

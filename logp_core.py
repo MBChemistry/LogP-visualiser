@@ -96,15 +96,80 @@ def mols_from_file(data: bytes, filename: str) -> list[tuple[str, Chem.Mol]]:
 
 
 @dataclass
-class LogPResult:
+class AtomContribResult:
     mol: Chem.Mol                 # heavy-atom molecule (used for drawing)
-    contributions: list[float]    # per heavy atom, H contributions folded in
-    logp: float                   # total Crippen LogP
-    mr: float                     # Crippen molar refractivity
+    contributions: list[float]    # per heavy atom
+    total: float                  # whole-molecule value (sum of contributions)
+    prop: str                     # key into PROPERTIES ("LogP" or "TPSA")
     smiles: str
 
+    @property
+    def info(self) -> dict:
+        return PROPERTIES[self.prop]
 
-def compute_logp_contributions(mol: Chem.Mol) -> LogPResult:
+
+# How each property is coloured and labelled.
+#   diverging=True  -> blue (-) / white (0) / red (+), symmetric scale
+#   diverging=False -> white (0) -> colour (max), values are never negative
+PROPERTIES = {
+    "LogP": {
+        "title": "Crippen LogP",
+        "unit": "",
+        "diverging": True,
+        "value_fmt": "{:+.2f}",
+        "total_fmt": "{:.2f}",
+        "colorbar": "Atomic LogP contribution  (blue = hydrophilic, red = lipophilic)",
+        "default_fixed_vmax": 1.0,
+    },
+    "TPSA": {
+        "title": "TPSA",
+        "unit": " Å²",
+        "diverging": False,
+        "value_fmt": "{:.1f}",
+        "total_fmt": "{:.1f}",
+        "colorbar": "Atomic TPSA contribution (Å²)  (darker blue = more polar surface)",
+        "default_fixed_vmax": 25.0,
+    },
+}
+
+
+def _heavy_with_h_map(mol: Chem.Mol):
+    """Return (molH, heavy, heavy_idx) where heavy_idx maps molH idx -> heavy idx."""
+    mol = Chem.Mol(mol)
+    Chem.SanitizeMol(mol)
+    molH = Chem.AddHs(mol)
+    heavy = Chem.RemoveHs(molH)
+    heavy_idx = {}
+    k = 0
+    for atom in molH.GetAtoms():  # RemoveHs keeps heavy atoms in their original order
+        if atom.GetAtomicNum() != 1 or atom.GetDegree() == 0:
+            heavy_idx[atom.GetIdx()] = k
+            k += 1
+    if k != heavy.GetNumAtoms():  # e.g. explicit isotopic H kept - fall back
+        heavy = molH
+        heavy_idx = {i: i for i in range(molH.GetNumAtoms())}
+    return molH, heavy, heavy_idx
+
+
+def compute_tpsa_contributions(mol: Chem.Mol, include_s_and_p: bool = False) -> AtomContribResult:
+    """
+    Ertl topological polar surface area, per atom (Å²).
+
+    Only N and O (and optionally S and P) contribute; the contribution of each
+    polar atom already accounts for its attached hydrogens, so carbons are 0.
+    """
+    _molH, heavy, _ = _heavy_with_h_map(mol)
+    contribs = list(rdMolDescriptors._CalcTPSAContribs(heavy, includeSandP=include_s_and_p))
+    return AtomContribResult(
+        mol=heavy,
+        contributions=contribs,
+        total=rdMolDescriptors.CalcTPSA(heavy, includeSandP=include_s_and_p),
+        prop="TPSA",
+        smiles=Chem.MolToSmiles(heavy),
+    )
+
+
+def compute_logp_contributions(mol: Chem.Mol) -> AtomContribResult:
     """
     Wildman-Crippen atom contributions.
 
@@ -113,22 +178,8 @@ def compute_logp_contributions(mol: Chem.Mol) -> LogPResult:
     longer sum to the real LogP. So: add explicit Hs, compute, then add each
     H's contribution onto the heavy atom it is attached to.
     """
-    mol = Chem.Mol(mol)
-    Chem.SanitizeMol(mol)
-    molH = Chem.AddHs(mol)
+    molH, heavy, heavy_idx = _heavy_with_h_map(mol)
     contribs = rdMolDescriptors._CalcCrippenContribs(molH)
-
-    heavy_idx = {}  # molH index -> heavy-atom index
-    heavy = Chem.RemoveHs(molH)
-    # RemoveHs keeps heavy atoms in their original order
-    k = 0
-    for atom in molH.GetAtoms():
-        if atom.GetAtomicNum() != 1 or atom.GetDegree() == 0:
-            heavy_idx[atom.GetIdx()] = k
-            k += 1
-    if k != heavy.GetNumAtoms():  # e.g. explicit isotopic H kept - fall back
-        heavy = molH
-        heavy_idx = {i: i for i in range(molH.GetNumAtoms())}
 
     per_atom = [0.0] * heavy.GetNumAtoms()
     for atom, (logp_c, _mr) in zip(molH.GetAtoms(), contribs):
@@ -139,13 +190,30 @@ def compute_logp_contributions(mol: Chem.Mol) -> LogPResult:
             nbr = atom.GetNeighbors()[0].GetIdx()
             per_atom[heavy_idx[nbr]] += logp_c
 
-    return LogPResult(
+    return AtomContribResult(
         mol=heavy,
         contributions=per_atom,
-        logp=Crippen.MolLogP(molH),
-        mr=Crippen.MolMR(molH),
+        total=Crippen.MolLogP(molH),
+        prop="LogP",
         smiles=Chem.MolToSmiles(heavy),
     )
+
+
+def molecule_summary(mol: Chem.Mol) -> dict:
+    """Whole-molecule descriptors shown alongside the maps."""
+    from rdkit.Chem import Descriptors, Lipinski
+
+    m = Chem.Mol(mol)
+    Chem.SanitizeMol(m)
+    return {
+        "LogP": Crippen.MolLogP(Chem.AddHs(m)),
+        "TPSA": rdMolDescriptors.CalcTPSA(m),
+        "MW": Descriptors.MolWt(m),
+        "MR": Crippen.MolMR(Chem.AddHs(m)),
+        "HBD": Lipinski.NumHDonors(m),
+        "HBA": Lipinski.NumHAcceptors(m),
+        "RotB": rdMolDescriptors.CalcNumRotatableBonds(m),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -153,10 +221,22 @@ def compute_logp_contributions(mol: Chem.Mol) -> LogPResult:
 # ---------------------------------------------------------------------------
 
 CMAP = plt.get_cmap("bwr")  # blue (negative) -> white (0) -> red (positive)
+# white (0) -> the same blue as the LogP map's most negative end
+CMAP_SEQ = mcolors.LinearSegmentedColormap.from_list("white_blue", [CMAP(0.5), CMAP(0.0)])
+
+
+def colour_scale(result: AtomContribResult, vmax: float | None):
+    """(cmap, norm, vmax) for this result; vmax None/<=0 -> scale to this molecule."""
+    w = np.asarray(result.contributions, dtype=float)
+    if vmax is None or vmax <= 0:
+        vmax = float(np.max(np.abs(w))) if len(w) and np.max(np.abs(w)) > 0 else 1.0
+    if result.info["diverging"]:
+        return CMAP, mcolors.Normalize(vmin=-vmax, vmax=vmax, clip=True), vmax
+    return CMAP_SEQ, mcolors.Normalize(vmin=0, vmax=vmax, clip=True), vmax
 
 
 def render_heatmap(
-    result: LogPResult,
+    result: AtomContribResult,
     size: int = 800,
     vmax: float | None = None,
     sigma: float = 0.40,
@@ -173,8 +253,8 @@ def render_heatmap(
     """
     mol = Chem.Mol(result.mol)
     w = np.asarray(result.contributions, dtype=float)
-    if vmax is None or vmax <= 0:
-        vmax = float(np.max(np.abs(w))) if len(w) and np.max(np.abs(w)) > 0 else 1.0
+    cmap, norm, vmax = colour_scale(result, vmax)
+    fmt = result.info["value_fmt"]
 
     if mol.GetNumConformers() == 0 or mol.GetConformer().Is3D():
         rdDepictor.Compute2DCoords(mol)
@@ -190,7 +270,8 @@ def render_heatmap(
     opts.annotationFontScale = 0.6
     if show_values:
         for atom, c in zip(mol.GetAtoms(), w):
-            atom.SetProp("atomNote", f"{c:+.2f}")
+            if result.info["diverging"] or c > 0:
+                atom.SetProp("atomNote", fmt.format(c))
     drawer.DrawMolecule(mol)
     drawer.FinishDrawing()
     mol_layer = Image.open(io.BytesIO(drawer.GetDrawingText())).convert("RGBA")
@@ -212,8 +293,7 @@ def render_heatmap(
     for (px, py), wi in zip(pts, w):
         field += wi * np.exp(-((xx - px) ** 2 + (yy - py) ** 2) / (2 * s * s))
 
-    norm = mcolors.Normalize(vmin=-vmax, vmax=vmax, clip=True)
-    rgba = (CMAP(norm(field)) * 255).astype(np.uint8)
+    rgba = (cmap(norm(field)) * 255).astype(np.uint8)
     heat = Image.fromarray(rgba)  # (H, W, 4) uint8 -> RGBA
 
     # 3) composite: white background <- heatmap <- molecule
@@ -242,7 +322,7 @@ def _load_font(px: int):
 
 
 def render_circles(
-    result: LogPResult,
+    result: AtomContribResult,
     size: int = 800,
     vmax: float | None = None,
     radius: float = 0.38,
@@ -261,8 +341,8 @@ def render_circles(
 
     mol = Chem.Mol(result.mol)
     w = np.asarray(result.contributions, dtype=float)
-    if vmax is None or vmax <= 0:
-        vmax = float(np.max(np.abs(w))) if len(w) and np.max(np.abs(w)) > 0 else 1.0
+    cmap, norm, vmax = colour_scale(result, vmax)
+    fmt = result.info["value_fmt"]
 
     if mol.GetNumConformers() == 0 or mol.GetConformer().Is3D():
         rdDepictor.Compute2DCoords(mol)
@@ -297,7 +377,6 @@ def render_circles(
 
     # 2) circles with everything inside them, stacked vertically:
     #       #index (optional)  /  atom label  /  value (optional)
-    norm = mcolors.Normalize(vmin=-vmax, vmax=vmax, clip=True)
     draw = ImageDraw.Draw(img)
     outline_w = max(int(r * 0.07), 1)
     black = (0, 0, 0)
@@ -326,13 +405,14 @@ def render_circles(
     value_font = index_font = None
     if "value" in lay:
         dy, s_ = lay["value"]
-        value_font = fit("-0.00", s_ * r, 1.8 * half_chord(dy * r))
+        widest = max((fmt.format(c) for c in w), key=len, default="-0.00")
+        value_font = fit(max(widest, "-0.00", key=len), s_ * r, 1.8 * half_chord(dy * r))
     if "index" in lay:
         dy, s_ = lay["index"]
         index_font = fit(f"#{mol.GetNumAtoms() - 1}", s_ * r, 1.8 * half_chord(dy * r))
 
     for atom, (x, y), c in zip(mol.GetAtoms(), pts, w):
-        fill = tuple(int(v * 255) for v in CMAP(norm(c))[:3])
+        fill = tuple(int(v * 255) for v in cmap(norm(c))[:3])
         draw.ellipse([x - r, y - r, x + r, y + r], fill=fill,
                      outline=(60, 60, 60), width=outline_w)
 
@@ -351,7 +431,7 @@ def render_circles(
         _draw_rich_label(draw, x, y + dy * r, runs, s_ * r, 1.5 * half_chord(dy * r), black)
 
         if value_font is not None:
-            draw.text((x, y + lay["value"][0] * r), f"{c:+.2f}", fill=black, font=value_font, anchor="mm")
+            draw.text((x, y + lay["value"][0] * r), fmt.format(c), fill=black, font=value_font, anchor="mm")
         if index_font is not None:
             draw.text((x, y + lay["index"][0] * r), f"#{atom.GetIdx()}", fill=black, font=index_font, anchor="mm")
 
@@ -384,10 +464,9 @@ def _draw_rich_label(draw, x, yc, runs, size, max_w, fill):
         xx += wdt
 
 
-def render_figure(result: LogPResult, title: str | None = None,
+def render_figure(result: AtomContribResult, title: str | None = None,
                   style: str = "circles", **kwargs) -> bytes:
-    """Circles/heatmap + colour bar + LogP title, returned as PNG bytes."""
-    vmax = kwargs.get("vmax")
+    """Circles/heatmap + colour bar + title, returned as PNG bytes."""
     if style == "circles":
         img = render_circles(result, **kwargs)
     else:
@@ -403,24 +482,30 @@ def render_figure(result: LogPResult, title: str | None = None,
         img = img.crop((max(bbox[0] - m, 0), max(bbox[1] - m, 0),
                         min(bbox[2] + m, img.width), min(bbox[3] + m, img.height)))
 
-    if vmax is None or vmax <= 0:
-        vmax = max(max(abs(c) for c in result.contributions), 1e-6)
+    cmap, norm, _ = colour_scale(result, kwargs.get("vmax"))
+    info = result.info
 
     aspect = img.height / img.width
     fig, ax = plt.subplots(figsize=(7, 7 * aspect + 1.2), dpi=150)
     ax.imshow(img)
     ax.axis("off")
-    sm = plt.cm.ScalarMappable(cmap=CMAP, norm=mcolors.Normalize(-vmax, vmax))
+    sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
     cb = fig.colorbar(sm, ax=ax, orientation="horizontal", fraction=0.045, pad=0.02)
-    cb.set_label("Atomic LogP contribution  (blue = hydrophilic, red = lipophilic)")
-    ax.set_title(title or f"Crippen LogP = {result.logp:.2f}", fontsize=14)
+    cb.set_label(info["colorbar"])
+    ax.set_title(title or default_title(result), fontsize=14)
     buf = io.BytesIO()
     fig.savefig(buf, format="png", bbox_inches="tight", facecolor="white")
     plt.close(fig)
     return buf.getvalue()
 
 
-def contribution_table(result: LogPResult) -> list[dict]:
+def default_title(result: AtomContribResult) -> str:
+    info = result.info
+    return f"{info['title']} = {info['total_fmt'].format(result.total)}{info['unit']}"
+
+
+def contribution_table(result: AtomContribResult) -> list[dict]:
+    col = f"{result.prop} contribution{result.info['unit'].replace(' ', ' (') + ')' if result.info['unit'] else ''}"
     rows = []
     for atom, c in zip(result.mol.GetAtoms(), result.contributions):
         rows.append({
@@ -428,7 +513,7 @@ def contribution_table(result: LogPResult) -> list[dict]:
             "Element": atom.GetSymbol(),
             "Attached H": atom.GetTotalNumHs(),
             "Aromatic": atom.GetIsAromatic(),
-            "LogP contribution": round(c, 3),
+            col: round(c, 3),
         })
     return rows
 
@@ -440,12 +525,14 @@ def contribution_table(result: LogPResult) -> list[dict]:
 if __name__ == "__main__":
     import argparse
 
-    p = argparse.ArgumentParser(description="LogP atom-contribution heatmap")
+    p = argparse.ArgumentParser(description="LogP / TPSA atom-contribution maps")
     p.add_argument("molecule", help="SMILES/InChI string, or path to .mol/.sdf/.mol2/.pdb/.smi file")
     p.add_argument("-o", "--output", default="logp_heatmap.png")
     p.add_argument("--vmax", type=float, default=None, help="fixed colour scale (default: per molecule)")
     p.add_argument("--no-values", action="store_true", help="hide per-atom numbers")
     p.add_argument("--style", choices=["circles", "heatmap"], default="circles")
+    p.add_argument("--property", choices=["logp", "tpsa"], default="logp")
+    p.add_argument("--egg", metavar="PNG", help="also save a BOILED-Egg plot to this file")
     a = p.parse_args()
 
     path = Path(a.molecule)
@@ -454,7 +541,16 @@ if __name__ == "__main__":
     else:
         name, mol = a.molecule, mol_from_text(a.molecule)
 
-    res = compute_logp_contributions(mol)
+    res = compute_tpsa_contributions(mol) if a.property == "tpsa" else compute_logp_contributions(mol)
     Path(a.output).write_bytes(render_figure(res, style=a.style, vmax=a.vmax,
                                               show_values=not a.no_values))
-    print(f"{res.smiles}  LogP = {res.logp:.2f}  -> {a.output}")
+    print(f"{res.smiles}  {default_title(res)}  -> {a.output}")
+
+    if a.egg:
+        import boiled_egg
+
+        s = molecule_summary(mol)
+        pred = boiled_egg.predict(s["LogP"], s["TPSA"])
+        Path(a.egg).write_bytes(boiled_egg.plot(s["LogP"], s["TPSA"], label=name))
+        print(f"BOILED-Egg: GI absorption {'High' if pred['hia'] else 'Low'}, "
+              f"BBB permeant {'Yes' if pred['bbb'] else 'No'}  -> {a.egg}")
