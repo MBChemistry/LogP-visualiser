@@ -127,7 +127,7 @@ PROPERTIES = {
         "diverging": False,
         "value_fmt": "{:.1f}",
         "total_fmt": "{:.1f}",
-        "colorbar": "Atomic TPSA contribution (Å²)  (darker blue = more polar surface)",
+        "colorbar": "Atomic TPSA contribution (Å²)  (darker green = more polar surface)",
         "default_fixed_vmax": 25.0,
     },
 }
@@ -221,8 +221,8 @@ def molecule_summary(mol: Chem.Mol) -> dict:
 # ---------------------------------------------------------------------------
 
 CMAP = plt.get_cmap("bwr")  # blue (negative) -> white (0) -> red (positive)
-# white (0) -> the same blue as the LogP map's most negative end
-CMAP_SEQ = mcolors.LinearSegmentedColormap.from_list("white_blue", [CMAP(0.5), CMAP(0.0)])
+# TPSA: white (0) -> green (max); green kept light enough for black labels
+CMAP_SEQ = mcolors.LinearSegmentedColormap.from_list("white_green", ["#ffffff", "#1fb84a"])
 
 
 def colour_scale(result: AtomContribResult, vmax: float | None):

@@ -149,7 +149,7 @@ if view in ("LogP", "TPSA"):
         res = core.compute_tpsa_contributions(mol, include_s_and_p=tpsa_sp)
         vmax = vmax_tpsa if fixed else None
         blurb = ("Only polar atoms (N, O" + (", S, P" if tpsa_sp else "") + ") contribute; "
-                 "**darker blue** = more polar surface area. Carbons are 0.")
+                 "**darker green** = more polar surface area. Carbons are 0.")
     st.caption(blurb)
 
     col_img, col_info = st.columns([3, 2])

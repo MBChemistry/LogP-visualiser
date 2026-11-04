@@ -5,7 +5,7 @@ Calculate the lipophilicity (Wildman–Crippen LogP) and topological polar surfa
 structure. Switch between:
 
 - **LogP map**: red atoms increase LogP (lipophilic), blue atoms decrease it (hydrophilic)
-- **TPSA map**: darker blue = larger polar surface contribution (only N/O, optionally S/P)
+- **TPSA map**: white → green, darker green = larger polar surface contribution (only N/O, optionally S/P)
 - **BOILED-Egg** (Daina & Zoete, 2016): WLOGP vs TPSA plot predicting passive
   gastrointestinal absorption (white) and blood–brain barrier permeation (yolk)
 
