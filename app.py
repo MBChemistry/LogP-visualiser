@@ -7,10 +7,14 @@ Run with:
 
 import pandas as pd
 import streamlit as st
+from rdkit import Chem, RDLogger
 from streamlit_ketcher import st_ketcher
 
+import batch
 import boiled_egg
 import logp_core as core
+
+RDLogger.DisableLog("rdApp.*")  # bad SMILES are reported in the UI instead
 
 st.set_page_config(page_title="LogP & TPSA Visualiser", page_icon="🧪", layout="wide")
 st.title("LogP & TPSA atom-contribution visualiser")
@@ -29,9 +33,12 @@ EXAMPLES = {
     "Diclofenac": "OC(=O)Cc1ccccc1Nc1c(Cl)cccc1Cl",
     "Atenolol": "CC(C)NCC(O)COc1ccc(CC(N)=O)cc1",
 }
+BATCH_EXAMPLE = "\n".join(f"{smi} {name}" for name, smi in EXAMPLES.items())
 
-# ---------------- Sidebar: display options ----------------
+# ---------------- Sidebar ----------------
 with st.sidebar:
+    mode = st.radio("Mode", ["Single molecule", "Batch (multiple molecules)"], key="mode")
+    st.divider()
     st.header("Display options")
     style_label = st.radio("Style", ["Atom circles", "Smooth heatmap"])
     style = "circles" if style_label == "Atom circles" else "heatmap"
@@ -61,112 +68,60 @@ with st.sidebar:
     )
     size = st.select_slider("Image resolution", [500, 700, 900, 1200], 900)
 
-# ---------------- Input ----------------
-mol = None
-name = None
-tab_draw, tab_text, tab_file = st.tabs(["✏️ Draw", "⌨️ SMILES / InChI", "📁 Upload file"])
+RENDER = dict(style=style, size=size, sigma=sigma, radius=radius, show_hydrogens=show_h,
+              show_values=show_values, show_indices=show_indices)
 
-with tab_text:
-    ex = st.selectbox("Example molecules", ["—"] + list(EXAMPLES))
-    default = EXAMPLES.get(ex, "")
-    text = st.text_area("SMILES, InChI or MOL block", value=default, height=100,
-                        placeholder="e.g. CC(C)Cc1ccc(cc1)C(C)C(=O)O")
-    use_text = st.button("Calculate from text", type="primary")
 
-with tab_draw:
-    st.write("Draw a structure and click **Apply** in the editor.")
-    drawn_smiles = st_ketcher(st.session_state.get("drawn", ""), height=500, key="ketcher")
-    if drawn_smiles:
-        st.session_state["drawn"] = drawn_smiles
+# ---------------- Reusable display pieces ----------------
+def plural(n, word):
+    return f"{n} {word}{'s' if n != 1 else ''}"
 
-with tab_file:
-    up = st.file_uploader("Chemical file", type=core.SUPPORTED_FILE_TYPES)
-    file_mols = []
-    if up is not None:
-        try:
-            file_mols = core.mols_from_file(up.getvalue(), up.name)
-        except Exception as e:  # noqa: BLE001
-            st.error(str(e))
-        if len(file_mols) > 1:
-            choice = st.selectbox(f"{len(file_mols)} molecules in file - choose one",
-                                  range(len(file_mols)), format_func=lambda i: file_mols[i][0])
-        elif file_mols:
-            choice = 0
 
-# Which input wins: the most recently used one
-if use_text:
-    st.session_state["source"] = "text"
-    st.session_state["text"] = text
-if drawn_smiles and drawn_smiles != st.session_state.get("last_drawn"):
-    st.session_state["source"] = "draw"
-    st.session_state["last_drawn"] = drawn_smiles
-if up is not None and up.file_id != st.session_state.get("last_file"):
-    st.session_state["source"] = "file"
-    st.session_state["last_file"] = up.file_id
+def show_metrics(summary):
+    m = st.columns(3) + st.columns(3)
+    m[0].metric("LogP (WLOGP)", f"{summary['LogP']:.2f}")
+    m[1].metric("TPSA", f"{summary['TPSA']:.1f} Å²")
+    m[2].metric("Mol. weight", f"{summary['MW']:.1f}")
+    m[3].metric("H-bond donors", summary["HBD"])
+    m[4].metric("H-bond acceptors", summary["HBA"])
+    m[5].metric("Rotatable bonds", summary["RotB"])
 
-source = st.session_state.get("source")
-try:
-    if source == "text" and st.session_state.get("text", "").strip():
-        mol = core.mol_from_text(st.session_state["text"])
-        name = ex if ex != "—" and st.session_state["text"].strip() == default else None
-    elif source == "draw" and drawn_smiles:
-        mol = core.mol_from_text(drawn_smiles)
-        name = "Drawn structure"
-    elif source == "file" and file_mols:
-        name, mol = file_mols[choice]
-except ValueError as e:
-    st.error(str(e))
 
-# ---------------- Output ----------------
-st.divider()
-if mol is None:
-    st.info("Enter a SMILES, draw a molecule, or upload a file to get started.")
-    st.stop()
+def _pass_fail_style(v):
+    if v in ("Pass", "High", "Yes"):
+        return "background-color: #c8f0d0; color: #0b5d1e; font-weight: 600"
+    if v in ("Fail", "Low", "No"):
+        return "background-color: #f8c9c4; color: #8a1c10; font-weight: 600"
+    return ""
 
-summary = core.molecule_summary(mol)
 
-m = st.columns(3) + st.columns(3)
-m[0].metric("LogP (WLOGP)", f"{summary['LogP']:.2f}")
-m[1].metric("TPSA", f"{summary['TPSA']:.1f} Å²")
-m[2].metric("Mol. weight", f"{summary['MW']:.1f}")
-m[3].metric("H-bond donors", summary["HBD"])
-m[4].metric("H-bond acceptors", summary["HBA"])
-m[5].metric("Rotatable bonds", summary["RotB"])
+def show_ro5(summary, key):
+    ro5_rows, ro5 = core.lipinski_rule_of_five(summary)
+    verdict = "PASS" if ro5["pass"] else "FAIL"
+    with st.expander(f"Lipinski's rule of five: **{verdict}** ({plural(ro5['violations'], 'violation')})",
+                     expanded=True):
+        ro5_df = pd.DataFrame(ro5_rows + [{
+            "Property": "Overall (≤ 1 violation allowed)",
+            "Value": plural(ro5["violations"], "violation"),
+            "Rule": "≤ 1 violation",
+            "Result": "Pass" if ro5["pass"] else "Fail",
+        }])
+        styled = (ro5_df.style.map(_pass_fail_style, subset=["Result"])
+                  .apply(lambda r: ["font-weight: 700; border-top: 2px solid #888"] * len(r)
+                         if r.name == len(ro5_df) - 1 else [""] * len(r), axis=1))
+        st.dataframe(styled, hide_index=True, width="stretch", key=f"ro5_{key}")
+        st.caption(
+            "Lipinski et al. (1997): poor oral absorption is more likely when **more than one** rule "
+            "is broken, so a molecule passes overall with at most one violation. LogP here is "
+            "Wildman–Crippen (Lipinski originally used MLogP); donors/acceptors use Lipinski's "
+            "counting (OH + NH; N + O)."
+        )
+        st.download_button("Download Lipinski table (CSV)", ro5_df.to_csv(index=False),
+                           file_name=f"{key}_lipinski_ro5.csv", key=f"ro5dl_{key}")
 
-ro5_rows, ro5 = core.lipinski_rule_of_five(summary)
-verdict = "PASS" if ro5["pass"] else "FAIL"
-with st.expander(f"Lipinski's rule of five: **{verdict}** "
-                 f"({ro5['violations']} violation{'s' if ro5['violations'] != 1 else ''})",
-                 expanded=True):
-    ro5_df = pd.DataFrame(ro5_rows + [{
-        "Property": "Overall (≤ 1 violation allowed)",
-        "Value": f"{ro5['violations']} violation{'s' if ro5['violations'] != 1 else ''}",
-        "Rule": "≤ 1 violation",
-        "Result": "Pass" if ro5["pass"] else "Fail",
-    }])
 
-    def _colour(v):
-        return ("background-color: #c8f0d0; color: #0b5d1e; font-weight: 600" if v == "Pass"
-                else "background-color: #f8c9c4; color: #8a1c10; font-weight: 600")
-
-    styled = (ro5_df.style.map(_colour, subset=["Result"])
-              .apply(lambda r: ["font-weight: 700; border-top: 2px solid #888"] * len(r)
-                     if r.name == len(ro5_df) - 1 else [""] * len(r), axis=1))
-    st.dataframe(styled, hide_index=True, width="stretch")
-    st.caption(
-        "Lipinski et al. (1997): poor oral absorption is more likely when **more than one** rule "
-        "is broken, so a molecule passes overall with at most one violation. LogP here is "
-        "Wildman–Crippen (Lipinski originally used MLogP); donors/acceptors use Lipinski's "
-        "counting (OH + NH; N + O)."
-    )
-
-view = st.segmented_control(
-    "Visualise", ["LogP", "TPSA", "BOILED-Egg"], default="LogP", key="view",
-    help="Switch between the per-atom LogP map, the per-atom TPSA map and the BOILED-Egg plot.",
-)
-view = view or "LogP"
-
-if view in ("LogP", "TPSA"):
+def show_atom_map(mol, view, title_prefix, file_stem, key):
+    """LogP or TPSA per-atom map + contributions table."""
     if view == "LogP":
         res = core.compute_logp_contributions(mol)
         vmax = vmax_logp if fixed else None
@@ -181,16 +136,10 @@ if view in ("LogP", "TPSA"):
 
     col_img, col_info = st.columns([3, 2])
     with col_img:
-        title = f"{name + ' - ' if name else ''}{core.default_title(res)}"
-        png = core.render_figure(
-            res, title=title,
-            style=style, size=size, vmax=vmax, sigma=sigma,
-            radius=radius, show_hydrogens=show_h,
-            show_values=show_values, show_indices=show_indices,
-        )
+        png = core.render_figure(res, title=f"{title_prefix}{core.default_title(res)}", vmax=vmax, **RENDER)
         st.image(png, width="stretch")
-        st.download_button("Download PNG", png, file_name=f"{view.lower()}_map.png", mime="image/png")
-
+        st.download_button("Download PNG", png, file_name=f"{file_stem}_{view.lower()}_map.png",
+                           mime="image/png", key=f"png_{key}_{view}")
     with col_info:
         st.code(res.smiles, language=None)
         df = pd.DataFrame(core.contribution_table(res))
@@ -200,18 +149,109 @@ if view in ("LogP", "TPSA"):
         st.dataframe(
             df.style.background_gradient(subset=[col], cmap=cmap, vmin=norm.vmin, vmax=norm.vmax)
             .format({col: "{:+.3f}" if res.info["diverging"] else "{:.2f}"}),
-            hide_index=True, width="stretch", height=400,
+            hide_index=True, width="stretch", height=400, key=f"atoms_{key}_{view}",
         )
         st.download_button("Download CSV", df.to_csv(index=False),
-                           file_name=f"{view.lower()}_contributions.csv")
+                           file_name=f"{file_stem}_{view.lower()}_contributions.csv",
+                           key=f"csv_{key}_{view}")
         st.caption(f"Sum of contributions = {sum(res.contributions):.3f}"
                    f"{res.info['unit']} (= total {res.prop}).")
 
-else:  # BOILED-Egg
+
+EGG_LEGEND = (
+    "- **White**: high probability of passive absorption from the gastrointestinal tract.\n"
+    "- **Yolk**: high probability of passive permeation through the blood–brain barrier.\n"
+    "- **Grey**: predicted poorly absorbed and not brain-penetrant."
+)
+EGG_REF = (
+    "Model: Daina & Zoete, *ChemMedChem* 2016, 11, 1117–1121. Uses WLOGP (Wildman–Crippen) "
+    "and TPSA (N/O only). Predicts *passive* diffusion only — it does not account for "
+    "active transport or P-glycoprotein efflux."
+)
+
+
+# =====================================================================
+# SINGLE MOLECULE MODE
+# =====================================================================
+def single_mode():
+    mol = None
+    name = None
+    tab_draw, tab_text, tab_file = st.tabs(["✏️ Draw", "⌨️ SMILES / InChI", "📁 Upload file"])
+
+    with tab_text:
+        ex = st.selectbox("Example molecules", ["—"] + list(EXAMPLES))
+        default = EXAMPLES.get(ex, "")
+        text = st.text_area("SMILES, InChI or MOL block", value=default, height=100,
+                            placeholder="e.g. CC(C)Cc1ccc(cc1)C(C)C(=O)O")
+        use_text = st.button("Calculate from text", type="primary")
+
+    with tab_draw:
+        st.write("Draw a structure and click **Apply** in the editor.")
+        drawn_smiles = st_ketcher(st.session_state.get("drawn", ""), height=500, key="ketcher")
+        if drawn_smiles:
+            st.session_state["drawn"] = drawn_smiles
+
+    with tab_file:
+        up = st.file_uploader("Chemical file", type=core.SUPPORTED_FILE_TYPES)
+        file_mols = []
+        choice = 0
+        if up is not None:
+            try:
+                file_mols = core.mols_from_file(up.getvalue(), up.name)
+            except Exception as e:  # noqa: BLE001
+                st.error(str(e))
+            if len(file_mols) > 1:
+                st.info(f"This file has {len(file_mols)} molecules. Switch to **Batch** mode in the "
+                        "sidebar to analyse them all at once.")
+                choice = st.selectbox(f"{len(file_mols)} molecules in file - choose one",
+                                      range(len(file_mols)), format_func=lambda i: file_mols[i][0])
+
+    # Which input wins: the most recently used one
+    if use_text:
+        st.session_state["source"] = "text"
+        st.session_state["text"] = text
+    if drawn_smiles and drawn_smiles != st.session_state.get("last_drawn"):
+        st.session_state["source"] = "draw"
+        st.session_state["last_drawn"] = drawn_smiles
+    if up is not None and up.file_id != st.session_state.get("last_file"):
+        st.session_state["source"] = "file"
+        st.session_state["last_file"] = up.file_id
+
+    source = st.session_state.get("source")
+    try:
+        if source == "text" and st.session_state.get("text", "").strip():
+            mol = core.mol_from_text(st.session_state["text"])
+            name = ex if ex != "—" and st.session_state["text"].strip() == default else None
+        elif source == "draw" and drawn_smiles:
+            mol = core.mol_from_text(drawn_smiles)
+            name = "Drawn structure"
+        elif source == "file" and file_mols:
+            name, mol = file_mols[choice]
+    except ValueError as e:
+        st.error(str(e))
+
+    st.divider()
+    if mol is None:
+        st.info("Enter a SMILES, draw a molecule, or upload a file to get started.")
+        return
+
+    summary = core.molecule_summary(mol)
+    show_metrics(summary)
+    show_ro5(summary, key="single")
+
+    view = st.segmented_control(
+        "Visualise", ["LogP", "TPSA", "BOILED-Egg"], default="LogP", key="view",
+        help="Switch between the per-atom LogP map, the per-atom TPSA map and the BOILED-Egg plot.",
+    ) or "LogP"
+
+    if view in ("LogP", "TPSA"):
+        show_atom_map(mol, view, f"{name + ' - ' if name else ''}", "molecule", key="single")
+        return
+
     pred = boiled_egg.predict(summary["LogP"], summary["TPSA"])
     col_egg, col_pred = st.columns([3, 2])
     with col_egg:
-        egg_png = boiled_egg.plot(summary["LogP"], summary["TPSA"], label=name or core.Chem.MolToSmiles(mol))
+        egg_png = boiled_egg.plot(summary["LogP"], summary["TPSA"], label=name or Chem.MolToSmiles(mol))
         st.image(egg_png, width="stretch")
         st.download_button("Download PNG", egg_png, file_name="boiled_egg.png", mime="image/png")
     with col_pred:
@@ -223,13 +263,160 @@ else:  # BOILED-Egg
                  "white": "the **white** (GI absorption region) but outside the yolk",
                  "grey": "**outside the egg** (grey region)"}[pred["region"]]
         st.markdown(f"The molecule falls in {where}.")
-        st.markdown(
-            "- **White**: high probability of passive absorption from the gastrointestinal tract.\n"
-            "- **Yolk**: high probability of passive permeation through the blood–brain barrier.\n"
-            "- **Grey**: predicted poorly absorbed and not brain-penetrant."
+        st.markdown(EGG_LEGEND)
+        st.caption(EGG_REF)
+
+
+# =====================================================================
+# BATCH MODE
+# =====================================================================
+@st.cache_data(show_spinner=False)
+def _results(smiles_and_names: tuple) -> list[dict]:
+    cpds = [batch.Compound(i + 1, n, s) for i, (s, n) in enumerate(smiles_and_names)]
+    return batch.results_table(cpds)
+
+
+def batch_mode():
+    st.subheader("Batch analysis")
+    tab_paste, tab_file = st.tabs(["⌨️ Paste SMILES list", "📁 Upload file"])
+    with tab_paste:
+        pasted = st.text_area(
+            "One molecule per line: `SMILES` optionally followed by a name",
+            height=180, key="batch_text",
+            placeholder="CC(C)Cc1ccc(cc1)C(C)C(=O)O ibuprofen\nCC(=O)Oc1ccccc1C(=O)O aspirin",
         )
-        st.caption(
-            "Model: Daina & Zoete, *ChemMedChem* 2016, 11, 1117–1121. Uses WLOGP (Wildman–Crippen) "
-            "and TPSA (N/O only). Predicts *passive* diffusion only — it does not account for "
-            "active transport or P-glycoprotein efflux."
+        c1, c2 = st.columns([1, 4])
+        run_paste = c1.button("Run batch", type="primary", key="run_paste")
+        c2.button("Load example list", key="batch_example",
+                  on_click=lambda: st.session_state.update(batch_text=BATCH_EXAMPLE))
+    with tab_file:
+        up = st.file_uploader(
+            "Multi-molecule file: .sdf, .smi/.txt (SMILES [name] per line) or .csv (with a "
+            "'smiles' column and optional 'name'/'id' column)",
+            type=["sdf", "smi", "smiles", "txt", "csv"], key="batch_file",
         )
+        run_file = st.button("Run batch on file", type="primary", key="run_file", disabled=up is None)
+
+    if run_paste or run_file:
+        skipped: list[str] = []
+        try:
+            if run_paste:
+                named = core.mols_from_lines(pasted, skipped)
+            else:
+                named = core.mols_from_file(up.getvalue(), up.name, skipped)
+        except ValueError as e:
+            named = []
+            st.error(str(e))
+        cpds = batch.make_compounds(named)
+        st.session_state["batch"] = [(c.smiles, c.name) for c in cpds]
+        st.session_state["batch_skipped"] = skipped
+        st.session_state.pop("batch_zip", None)
+
+    data = st.session_state.get("batch")
+    st.divider()
+    if not data:
+        st.info("Paste a list of SMILES or upload a multi-molecule file, then click **Run batch**.")
+        return
+
+    compounds = [batch.Compound(i + 1, n, s) for i, (s, n) in enumerate(data)]
+    rows = _results(tuple(data))
+    skipped = st.session_state.get("batch_skipped", [])
+    msg = f"**{plural(len(compounds), 'compound')}** analysed."
+    if skipped:
+        msg += f" {plural(len(skipped), 'entry')} could not be parsed and {'was' if len(skipped) == 1 else 'were'} skipped."
+    st.success(msg)
+    if skipped:
+        with st.expander("Skipped entries"):
+            st.code("\n".join(skipped), language=None)
+
+    # ---- Results table (all compounds) ----
+    st.subheader("Results")
+    df = pd.DataFrame(rows).drop(columns=["Egg region"])
+    st.dataframe(
+        df.style.map(_pass_fail_style, subset=["Lipinski Ro5", "GI absorption", "BBB permeant"])
+        .format({"MW": "{:.1f}", "LogP (WLOGP)": "{:.2f}", "TPSA (Å²)": "{:.1f}"}),
+        hide_index=True, width="stretch", key="batch_table",
+    )
+    n_ro5 = sum(r["Lipinski Ro5"] == "Pass" for r in rows)
+    n_gi = sum(r["GI absorption"] == "High" for r in rows)
+    n_bbb = sum(r["BBB permeant"] == "Yes" for r in rows)
+    st.caption(f"Lipinski pass: {n_ro5}/{len(rows)}   ·   High GI absorption: {n_gi}/{len(rows)}   ·   "
+               f"BBB permeant: {n_bbb}/{len(rows)}")
+
+    d1, d2 = st.columns(2)
+    d1.download_button("Download results table (CSV)", df.to_csv(index=False),
+                       file_name="batch_results.csv", key="batch_csv")
+    with d2:
+        kw = dict(RENDER, vmax_logp=vmax_logp if fixed else None,
+                  vmax_tpsa=vmax_tpsa if fixed else None)
+        sig = repr((sorted(kw.items()), tpsa_sp, tuple(data)))
+        cached = st.session_state.get("batch_zip")
+        if cached is None or cached[0] != sig:  # none yet, or display options changed
+            if st.button("Prepare ZIP of all results and images", key="make_zip",
+                         help="Per compound: LogP and TPSA maps (current display settings), per-atom "
+                              "CSVs, Lipinski table and BOILED-Egg plot. Plus the summary table and "
+                              "an all-compounds BOILED-Egg."):
+                bar = st.progress(0.0, text="Rendering compounds…")
+                zbytes = batch.build_zip(
+                    compounds, rows, kw, tpsa_include_sp=tpsa_sp,
+                    progress=lambda i, n: bar.progress(i / n, text=f"Rendering compound {i} of {n}…"))
+                st.session_state["batch_zip"] = (sig, zbytes)
+                bar.empty()
+                st.rerun()
+        else:
+            st.download_button("Download ZIP of all results and images", cached[1],
+                               file_name="batch_results.zip", mime="application/zip",
+                               type="primary", key="batch_zipdl")
+            st.caption(f"{len(cached[1]) / 1e6:.1f} MB · images use the current display options.")
+
+    # ---- Per-compound viewer ----
+    st.divider()
+    st.subheader("Compound viewer")
+    num = st.selectbox("Compound", [c.number for c in compounds],
+                       format_func=lambda n: compounds[n - 1].label + "   (" + (
+                           compounds[n - 1].smiles if len(compounds[n - 1].smiles) <= 60
+                           else compounds[n - 1].smiles[:57] + "…") + ")",
+                       key="batch_cpd")
+    cpd = compounds[num - 1]
+    mol = cpd.mol
+    st.markdown(f"### {cpd.label}")
+    summary = core.molecule_summary(mol)
+    show_metrics(summary)
+    show_ro5(summary, key=f"cpd{cpd.number:03d}")
+
+    view = st.segmented_control(
+        "Visualise", ["LogP", "TPSA", "BOILED-Egg"], default="LogP", key="batch_view",
+        help="The BOILED-Egg shows every compound in the batch; the selected one is ringed in yellow.",
+    ) or "LogP"
+
+    if view in ("LogP", "TPSA"):
+        show_atom_map(mol, view, f"{cpd.label} - ", f"cpd{cpd.number:03d}", key=f"cpd{cpd.number}")
+        return
+
+    col_egg, col_pred = st.columns([3, 2])
+    with col_egg:
+        egg_png = boiled_egg.plot_many([(r["Cpd"], r["LogP (WLOGP)"], r["TPSA (Å²)"]) for r in rows],
+                                       highlight=cpd.number)
+        st.image(egg_png, width="stretch")
+        st.download_button("Download PNG", egg_png, file_name="boiled_egg_all_compounds.png",
+                           mime="image/png", key="egg_all_dl")
+    with col_pred:
+        r = rows[cpd.number - 1]
+        st.markdown(f"**{cpd.label}** (ringed in yellow)")
+        p1, p2 = st.columns(2)
+        p1.metric("GI absorption", r["GI absorption"])
+        p2.metric("BBB permeant", r["BBB permeant"])
+        st.markdown("**All compounds**")
+        egg_df = pd.DataFrame(rows)[["Cpd", "Name", "LogP (WLOGP)", "TPSA (Å²)",
+                                     "GI absorption", "BBB permeant"]]
+        st.dataframe(egg_df.style.map(_pass_fail_style, subset=["GI absorption", "BBB permeant"])
+                     .format({"LogP (WLOGP)": "{:.2f}", "TPSA (Å²)": "{:.1f}"}),
+                     hide_index=True, width="stretch", key="egg_table")
+        st.markdown(EGG_LEGEND)
+        st.caption(EGG_REF)
+
+
+if mode.startswith("Single"):
+    single_mode()
+else:
+    batch_mode()

@@ -32,7 +32,7 @@ from matplotlib import colors as mcolors  # noqa: E402
 # Parsing
 # ---------------------------------------------------------------------------
 
-SUPPORTED_FILE_TYPES = ["mol", "sdf", "mol2", "pdb", "smi", "smiles", "txt"]
+SUPPORTED_FILE_TYPES = ["mol", "sdf", "mol2", "pdb", "smi", "smiles", "txt", "csv"]
 
 
 def mol_from_text(text: str) -> Chem.Mol:
@@ -52,8 +52,53 @@ def mol_from_text(text: str) -> Chem.Mol:
     return mol
 
 
-def mols_from_file(data: bytes, filename: str) -> list[tuple[str, Chem.Mol]]:
-    """Parse an uploaded chemical file. Returns a list of (name, mol)."""
+def mols_from_lines(text: str, skipped: list | None = None) -> list[tuple[str, Chem.Mol]]:
+    """One molecule per line: 'SMILES [name]' (blank lines and # comments ignored)."""
+    mols = []
+    for i, line in enumerate(text.splitlines()):
+        parts = line.strip().split(maxsplit=1)
+        if not parts or parts[0].startswith("#"):
+            continue
+        m = Chem.MolFromSmiles(parts[0])
+        if m is None:
+            if skipped is not None:
+                skipped.append(f"line {i + 1}: {line.strip()[:60]}")
+            continue
+        mols.append((parts[1].strip() if len(parts) > 1 else "", m))
+    return mols
+
+
+def _mols_from_csv(text: str, skipped: list | None) -> list[tuple[str, Chem.Mol]]:
+    """CSV with a 'smiles' column (any case) and optional name/id column."""
+    import csv
+
+    rows = list(csv.reader(io.StringIO(text)))
+    if not rows:
+        return []
+    header = [h.strip().lower() for h in rows[0]]
+    if "smiles" in header:
+        s_col = header.index("smiles")
+        n_col = next((header.index(k) for k in ("name", "id", "compound", "title", "cpd")
+                      if k in header), None)
+        body = rows[1:]
+    else:  # no header: first column = SMILES, second = name
+        s_col, n_col, body = 0, (1 if len(rows[0]) > 1 else None), rows
+    mols = []
+    for i, r in enumerate(body):
+        if not r or not r[s_col].strip():
+            continue
+        m = Chem.MolFromSmiles(r[s_col].strip())
+        if m is None:
+            if skipped is not None:
+                skipped.append(f"row {i + 1}: {r[s_col].strip()[:60]}")
+            continue
+        mols.append(((r[n_col].strip() if n_col is not None and n_col < len(r) else ""), m))
+    return mols
+
+
+def mols_from_file(data: bytes, filename: str, skipped: list | None = None) -> list[tuple[str, Chem.Mol]]:
+    """Parse an uploaded chemical file. Returns a list of (name, mol).
+    Unparseable entries are skipped (and described in `skipped` if given)."""
     ext = Path(filename).suffix.lower().lstrip(".")
     text = data.decode("utf-8", errors="replace")
     mols: list[tuple[str, Chem.Mol]] = []
@@ -64,6 +109,10 @@ def mols_from_file(data: bytes, filename: str) -> list[tuple[str, Chem.Mol]]:
             if m is not None:
                 name = m.GetProp("_Name") if m.HasProp("_Name") and m.GetProp("_Name") else f"Molecule {i + 1}"
                 mols.append((name, m))
+            elif skipped is not None:
+                skipped.append(f"record {i + 1}")
+    elif ext == "csv":
+        mols = _mols_from_csv(text, skipped)
     elif ext == "mol":
         m = Chem.MolFromMolBlock(text)
         if m is not None:
@@ -77,13 +126,7 @@ def mols_from_file(data: bytes, filename: str) -> list[tuple[str, Chem.Mol]]:
         if m is not None:
             mols.append((Path(filename).stem, m))
     else:  # .smi / .smiles / .txt  -> one SMILES per line, optional name
-        for i, line in enumerate(text.splitlines()):
-            parts = line.strip().split()
-            if not parts or parts[0].startswith("#"):
-                continue
-            m = Chem.MolFromSmiles(parts[0])
-            if m is not None:
-                mols.append((" ".join(parts[1:]) or parts[0], m))
+        mols = [(n or Chem.MolToSmiles(m), m) for n, m in mols_from_lines(text, skipped)]
 
     if not mols:
         raise ValueError(f"No valid molecules found in {filename}.")
