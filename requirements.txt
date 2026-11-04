@@ -1,0 +1,7 @@
+rdkit>=2024.3
+numpy
+pillow
+matplotlib
+pandas
+streamlit>=1.46
+streamlit-ketcher
