@@ -11,6 +11,9 @@ structure. Switch between:
 
 Stronger colour = larger contribution.
 
+A **Lipinski rule-of-five** table checks MW ≤ 500, LogP ≤ 5, H-bond donors ≤ 5 and
+H-bond acceptors ≤ 10, giving pass/fail per rule and overall (pass = at most one violation).
+
 Molecules can be **drawn** (Ketcher editor), typed as **SMILES / InChI**, or **uploaded**
 (`.mol`, `.sdf`, `.mol2`, `.pdb`, `.smi`). Hydrogen contributions are added to the heavy
 atom they are bonded to, so the per-atom values sum to the total LogP.

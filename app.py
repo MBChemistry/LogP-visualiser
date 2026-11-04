@@ -133,6 +133,33 @@ m[3].metric("H-bond donors", summary["HBD"])
 m[4].metric("H-bond acceptors", summary["HBA"])
 m[5].metric("Rotatable bonds", summary["RotB"])
 
+ro5_rows, ro5 = core.lipinski_rule_of_five(summary)
+verdict = "PASS" if ro5["pass"] else "FAIL"
+with st.expander(f"Lipinski's rule of five: **{verdict}** "
+                 f"({ro5['violations']} violation{'s' if ro5['violations'] != 1 else ''})",
+                 expanded=True):
+    ro5_df = pd.DataFrame(ro5_rows + [{
+        "Property": "Overall (≤ 1 violation allowed)",
+        "Value": f"{ro5['violations']} violation{'s' if ro5['violations'] != 1 else ''}",
+        "Rule": "≤ 1 violation",
+        "Result": "Pass" if ro5["pass"] else "Fail",
+    }])
+
+    def _colour(v):
+        return ("background-color: #c8f0d0; color: #0b5d1e; font-weight: 600" if v == "Pass"
+                else "background-color: #f8c9c4; color: #8a1c10; font-weight: 600")
+
+    styled = (ro5_df.style.map(_colour, subset=["Result"])
+              .apply(lambda r: ["font-weight: 700; border-top: 2px solid #888"] * len(r)
+                     if r.name == len(ro5_df) - 1 else [""] * len(r), axis=1))
+    st.dataframe(styled, hide_index=True, width="stretch")
+    st.caption(
+        "Lipinski et al. (1997): poor oral absorption is more likely when **more than one** rule "
+        "is broken, so a molecule passes overall with at most one violation. LogP here is "
+        "Wildman–Crippen (Lipinski originally used MLogP); donors/acceptors use Lipinski's "
+        "counting (OH + NH; N + O)."
+    )
+
 view = st.segmented_control(
     "Visualise", ["LogP", "TPSA", "BOILED-Egg"], default="LogP", key="view",
     help="Switch between the per-atom LogP map, the per-atom TPSA map and the BOILED-Egg plot.",

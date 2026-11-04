@@ -201,7 +201,7 @@ def compute_logp_contributions(mol: Chem.Mol) -> AtomContribResult:
 
 def molecule_summary(mol: Chem.Mol) -> dict:
     """Whole-molecule descriptors shown alongside the maps."""
-    from rdkit.Chem import Descriptors, Lipinski
+    from rdkit.Chem import Descriptors
 
     m = Chem.Mol(mol)
     Chem.SanitizeMol(m)
@@ -210,10 +210,35 @@ def molecule_summary(mol: Chem.Mol) -> dict:
         "TPSA": rdMolDescriptors.CalcTPSA(m),
         "MW": Descriptors.MolWt(m),
         "MR": Crippen.MolMR(Chem.AddHs(m)),
-        "HBD": Lipinski.NumHDonors(m),
-        "HBA": Lipinski.NumHAcceptors(m),
+        # Lipinski's own definitions: donors = NH + OH count, acceptors = N + O count
+        "HBD": rdMolDescriptors.CalcNumLipinskiHBD(m),
+        "HBA": rdMolDescriptors.CalcNumLipinskiHBA(m),
         "RotB": rdMolDescriptors.CalcNumRotatableBonds(m),
     }
+
+
+def lipinski_rule_of_five(summary: dict) -> tuple[list[dict], dict]:
+    """
+    Lipinski's rule of five (Lipinski et al., Adv. Drug Deliv. Rev. 1997).
+
+    Poor oral absorption is more likely when MORE THAN ONE rule is broken,
+    so the molecule passes overall with at most one violation.
+    Returns (rows, overall).
+    """
+    checks = [
+        ("Molecular weight", summary["MW"], 500, "≤ 500 Da", "{:.1f}"),
+        ("LogP (Crippen)", summary["LogP"], 5, "≤ 5", "{:.2f}"),
+        ("H-bond donors (OH + NH)", summary["HBD"], 5, "≤ 5", "{:d}"),
+        ("H-bond acceptors (N + O)", summary["HBA"], 10, "≤ 10", "{:d}"),
+    ]
+    rows = []
+    for name, value, limit, rule, fmt in checks:
+        ok = value <= limit
+        rows.append({"Property": name, "Value": fmt.format(value), "Rule": rule,
+                     "Result": "Pass" if ok else "Fail"})
+    violations = sum(r["Result"] == "Fail" for r in rows)
+    overall = {"violations": violations, "pass": violations <= 1}
+    return rows, overall
 
 
 # ---------------------------------------------------------------------------
