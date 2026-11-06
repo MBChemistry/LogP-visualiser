@@ -77,14 +77,49 @@ def plural(n, word):
     return f"{n} {word}{'s' if n != 1 else ''}"
 
 
+HELP = {
+    "LogP": "Lipophilicity: how strongly a molecule prefers an oily phase (octanol) over water. "
+            "Higher means more lipophilic. Calculated by summing Wildman–Crippen atom "
+            "contributions (WLOGP). Lipinski's guide is ≤ 5.",
+    "TPSA": "Topological polar surface area: the surface area of polar atoms (N and O, with "
+            "their hydrogens), estimated from Ertl's fragment values. Higher values generally "
+            "mean poorer membrane permeation. Used by the BOILED-Egg model.",
+    "MW": "Molecular weight: the sum of the average atomic masses, in g/mol. Lipinski's guide "
+          "is ≤ 500.",
+    "Fsp3": "Fraction of sp3 carbons: sp3-hybridised carbons ÷ total carbons. Runs from 0 (no "
+            "sp3 carbons, e.g. benzene) to 1 (all sp3, e.g. cyclohexane); higher means a more "
+            "saturated, three-dimensional molecule. A drug-likeness parameter (Wei et al., "
+            "Drug Discov. Today 2020), not a pass/fail rule. Shown as n/a if there is no carbon.",
+    "HBD": "Hydrogen-bond donors: the number of OH and NH hydrogens (Lipinski's counting). "
+           "Lipinski's guide is ≤ 5.",
+    "HBA": "Hydrogen-bond acceptors: the number of N and O atoms (Lipinski's counting). "
+           "Lipinski's guide is ≤ 10.",
+    "RotB": "Rotatable bonds: single bonds that can rotate freely, excluding ring and terminal "
+            "bonds. A measure of molecular flexibility.",
+    "GI": "Predicted passive absorption from the gastrointestinal tract. High if the molecule "
+          "falls in the white or yolk of the BOILED-Egg plot.",
+    "BBB": "Predicted passive permeation of the blood–brain barrier. Yes if the molecule falls "
+           "in the yolk of the BOILED-Egg plot.",
+}
+
+
 def show_metrics(summary):
-    m = st.columns(3) + st.columns(3)
-    m[0].metric("LogP (WLOGP)", f"{summary['LogP']:.2f}")
-    m[1].metric("TPSA", f"{summary['TPSA']:.1f} Å²")
-    m[2].metric("Mol. weight", f"{summary['MW']:.1f}")
-    m[3].metric("H-bond donors", summary["HBD"])
-    m[4].metric("H-bond acceptors", summary["HBA"])
-    m[5].metric("Rotatable bonds", summary["RotB"])
+    fsp3 = "n/a" if summary["Fsp3"] is None else f"{summary['Fsp3']:.2f}"
+    top, bottom = st.columns(4), st.columns(4)
+    top[0].metric("LogP (WLOGP)", f"{summary['LogP']:.2f}", help=HELP["LogP"])
+    top[1].metric("TPSA", f"{summary['TPSA']:.1f} Å²", help=HELP["TPSA"])
+    top[2].metric("Mol. weight", f"{summary['MW']:.1f}", help=HELP["MW"])
+    top[3].metric("Fsp3", fsp3, help=HELP["Fsp3"])
+    bottom[0].metric("H-bond donors", summary["HBD"], help=HELP["HBD"])
+    bottom[1].metric("H-bond acceptors", summary["HBA"], help=HELP["HBA"])
+    bottom[2].metric("Rotatable bonds", summary["RotB"], help=HELP["RotB"])
+
+
+def summary_download(row, file_stem, key):
+    """All whole-molecule results for one molecule (incl. Fsp3) as a one-row CSV."""
+    st.download_button("Download molecule results (CSV)",
+                       pd.DataFrame([row]).to_csv(index=False),
+                       file_name=f"{file_stem}_results.csv", key=f"summary_{key}")
 
 
 def _pass_fail_style(v):
@@ -246,6 +281,9 @@ def single_mode():
 
     summary = core.molecule_summary(mol)
     show_metrics(summary)
+    single_row = batch.analyse(batch.Compound(1, name or "", Chem.MolToSmiles(mol)))
+    single_row.pop("Cpd")
+    summary_download(single_row, "molecule", key="single")
     show_ro5(summary, key="single")
 
     view = st.segmented_control(
@@ -266,8 +304,8 @@ def single_mode():
     with col_pred:
         st.subheader("Prediction")
         p1, p2 = st.columns(2)
-        p1.metric("GI absorption", "High" if pred["hia"] else "Low")
-        p2.metric("BBB permeant", "Yes" if pred["bbb"] else "No")
+        p1.metric("GI absorption", "High" if pred["hia"] else "Low", help=HELP["GI"])
+        p2.metric("BBB permeant", "Yes" if pred["bbb"] else "No", help=HELP["BBB"])
         where = {"yolk": "the **yolk** (BBB region, which also implies good GI absorption)",
                  "white": "the **white** (GI absorption region) but outside the yolk",
                  "grey": "**outside the egg** (grey region)"}[pred["region"]]
@@ -358,8 +396,13 @@ def batch_mode():
     df = pd.DataFrame(rows).drop(columns=["Egg region"])
     st.dataframe(
         df.style.map(_pass_fail_style, subset=["Lipinski Ro5", "GI absorption", "BBB permeant"])
-        .format({"MW": "{:.1f}", "LogP (WLOGP)": "{:.2f}", "TPSA (Å²)": "{:.1f}"}),
+        .format({"MW": "{:.1f}", "LogP (WLOGP)": "{:.2f}", "TPSA (Å²)": "{:.1f}", "Fsp3": "{:.2f}"},
+                na_rep="n/a"),
         hide_index=True, width="stretch", key="batch_table",
+        column_config={col: st.column_config.Column(help=HELP[k]) for col, k in {
+            "MW": "MW", "LogP (WLOGP)": "LogP", "TPSA (Å²)": "TPSA", "HBD": "HBD", "HBA": "HBA",
+            "Rotatable bonds": "RotB", "Fsp3": "Fsp3", "GI absorption": "GI", "BBB permeant": "BBB",
+        }.items()},
     )
     n_ro5 = sum(r["Lipinski Ro5"] == "Pass" for r in rows)
     n_gi = sum(r["GI absorption"] == "High" for r in rows)
@@ -383,9 +426,9 @@ def batch_mode():
         cached = st.session_state.get("batch_zip")
         if cached is None or cached[0] != sig:  # none yet, or display options changed
             if st.button("Prepare ZIP of all results and images", key="make_zip",
-                         help="Per compound: LogP and TPSA maps (current display settings), per-atom "
-                              "CSVs, Lipinski table and BOILED-Egg plot. Plus the summary table and "
-                              "an all-compounds BOILED-Egg."):
+                         help="Per compound: LogP and TPSA maps (current display settings), results "
+                              "summary (incl. Fsp3), per-atom CSV, Lipinski table and BOILED-Egg "
+                              "plot. Plus the summary table and an all-compounds BOILED-Egg."):
                 bar = st.progress(0.0, text="Rendering compounds…")
                 zbytes = batch.build_zip(
                     compounds, rows, kw, tpsa_include_sp=tpsa_sp,
@@ -412,6 +455,7 @@ def batch_mode():
     st.markdown(f"### {cpd.label}")
     summary = core.molecule_summary(mol)
     show_metrics(summary)
+    summary_download(rows[cpd.number - 1], f"cpd{cpd.number:03d}", key=f"cpd{cpd.number}")
     show_ro5(summary, key=f"cpd{cpd.number:03d}")
 
     view = st.segmented_control(
@@ -434,8 +478,8 @@ def batch_mode():
         r = rows[cpd.number - 1]
         st.markdown(f"**{cpd.label}** (ringed in yellow)")
         p1, p2 = st.columns(2)
-        p1.metric("GI absorption", r["GI absorption"])
-        p2.metric("BBB permeant", r["BBB permeant"])
+        p1.metric("GI absorption", r["GI absorption"], help=HELP["GI"])
+        p2.metric("BBB permeant", r["BBB permeant"], help=HELP["BBB"])
         st.markdown("**All compounds**")
         egg_df = pd.DataFrame(batch.egg_rows(rows))
         st.dataframe(egg_df.drop(columns=["SMILES"]).style

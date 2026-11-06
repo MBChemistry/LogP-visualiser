@@ -59,6 +59,7 @@ def analyse(cpd: Compound) -> dict:
         "HBD": s["HBD"],
         "HBA": s["HBA"],
         "Rotatable bonds": s["RotB"],
+        "Fsp3": None if s["Fsp3"] is None else round(s["Fsp3"], 3),
         "Ro5 violations": ro5["violations"],
         "Lipinski Ro5": "Pass" if ro5["pass"] else "Fail",
         "GI absorption": "High" if egg["hia"] else "Low",
@@ -113,6 +114,7 @@ def build_zip(compounds: list[Compound], rows: list[dict], render_kwargs: dict,
       boiled_egg_table.csv
       boiled_egg_all_compounds.png
       cpd_001_<name>/  logp_map.png, tpsa_map.png, atom_contributions.csv (LogP + TPSA),
+                       summary.csv (all whole-molecule results, incl. Fsp3),
                        lipinski_ro5.csv, boiled_egg.png
     `render_kwargs` are passed to core.render_figure (style, size, ...). Use
     'vmax_logp' / 'vmax_tpsa' keys for the fixed colour scales (None = relative).
@@ -152,6 +154,7 @@ def build_zip(compounds: list[Compound], rows: list[dict], render_kwargs: dict,
                                     "Value": str(ro5["violations"]), "Rule": "≤ 1 violation",
                                     "Result": "Pass" if ro5["pass"] else "Fail"}]
             z.writestr(f"{folder}/lipinski_ro5.csv", _csv(ro5_rows))
+            z.writestr(f"{folder}/summary.csv", _csv([row]))
             z.writestr(f"{folder}/boiled_egg.png",
                        boiled_egg.plot_many([(r["Cpd"], r["LogP (WLOGP)"], r["TPSA (Å²)"]) for r in rows],
                                             highlight=cpd.number,

@@ -257,6 +257,9 @@ def molecule_summary(mol: Chem.Mol) -> dict:
         "HBD": rdMolDescriptors.CalcNumLipinskiHBD(m),
         "HBA": rdMolDescriptors.CalcNumLipinskiHBA(m),
         "RotB": rdMolDescriptors.CalcNumRotatableBonds(m),
+        # sp3 carbons / total carbons. Undefined (None) with no carbon, where RDKit gives 0.
+        "Fsp3": (rdMolDescriptors.CalcFractionCSP3(m)
+                 if any(a.GetAtomicNum() == 6 for a in m.GetAtoms()) else None),
     }
 
 
@@ -423,7 +426,9 @@ def render_circles(
     # 1) bonds only (no atom labels), black
     drawer = rdMolDraw2D.MolDraw2DCairo(size, size)
     opts = drawer.drawOptions()
-    opts.noAtomLabels = True
+    # Bond-free molecules (water, [Na+].[Cl-]) need labels for RDKit to get a finite
+    # drawing scale; the opaque circles below cover them.
+    opts.noAtomLabels = mol.GetNumBonds() > 0
     opts.useBWAtomPalette()
     opts.padding = 0.15
     opts.bondLineWidth = 3 * ss

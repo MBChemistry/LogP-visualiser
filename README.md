@@ -11,6 +11,10 @@ structure. Switch between:
 
 Stronger colour = larger contribution.
 
+**Fsp3**, the fraction of carbons that are sp3-hybridised
+([Wei et al., 2020](https://pubmed.ncbi.nlm.nih.gov/32712310/)), is shown with the other
+metrics and included in the exported results.
+
 A **Lipinski rule-of-five** table checks MW ≤ 500, LogP ≤ 5, H-bond donors ≤ 5 and
 H-bond acceptors ≤ 10, giving pass/fail per rule and overall (pass = at most one violation).
 
