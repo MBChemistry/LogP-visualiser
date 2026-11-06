@@ -163,7 +163,9 @@ def show_filters(mol, summary, key):
                   .apply(lambda r: ["font-weight: 700; border-top: 2px solid #888"] * len(r)
                          if r.name == len(df) - 1 else [""] * len(r), axis=1))
         st.dataframe(styled, hide_index=True, width="stretch", key=f"filt_{key}_{name}")
-        st.caption(f"{f.reference}." + (f" {f.notes}" if f.notes else ""))
+        st.caption(f"{f.reference}." + (f" {f.notes}" if f.notes else "") +
+                   " Egan's filter is not listed: the BOILED-Egg view covers the same "
+                   "LogP/TPSA model of passive absorption.")
 
         d1, d2 = st.columns(2)
         d1.download_button(f"Download {f.name} table (CSV)",

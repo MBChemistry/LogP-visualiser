@@ -17,7 +17,7 @@ metrics and included in the exported results. A display option highlights rotata
 bonds in yellow on the LogP and TPSA maps.
 
 **Druglikeness filters**: a dropdown of five published oral-druglikeness filters —
-Lipinski, Ghose, Veber, Egan and Muegge — each with a description, its criteria, this
+Lipinski, Ghose, Veber and Muegge — each with a description, its criteria, this
 molecule's values and pass/fail per criterion and overall. Lipinski allows one violation;
 the others require all criteria. All five appear in the batch results table and exports.
 
@@ -59,6 +59,6 @@ python logp_core.py "CC(=O)Nc1ccc(O)cc1" --property tpsa -o tpsa.png --egg egg.p
 | `logp_core.py` | Parsing, LogP/TPSA contributions and image rendering (also a CLI) |
 | `boiled_egg.py` | BOILED-Egg ellipses, prediction and plots (single and multi-compound) |
 | `batch.py` | Batch mode: compound numbering, results table and ZIP export |
-| `druglikeness.py` | Lipinski, Ghose, Veber, Egan and Muegge filter definitions |
+| `druglikeness.py` | Lipinski, Ghose, Veber and Muegge filter definitions |
 | `packages.txt` | System libraries for Streamlit Community Cloud |
 | `requirements.txt` | Python dependencies |

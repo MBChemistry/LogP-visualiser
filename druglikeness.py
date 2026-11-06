@@ -1,5 +1,8 @@
 """
-Druglikeness filters: Lipinski, Ghose, Veber, Egan and Muegge.
+Druglikeness filters: Lipinski, Ghose, Veber and Muegge.
+
+Egan's filter is not here: it models passive absorption from LogP and TPSA, which
+the BOILED-Egg view already shows on those same two axes.
 
 Each filter is a list of criteria on whole-molecule descriptors. A molecule
 passes a criterion when its value falls inside the stated range.
@@ -158,22 +161,8 @@ FILTERS: dict[str, Filter] = {
               "limit; the TPSA form is used here, as in SwissADME.",
         column="Veber",
     ),
-    "Egan": Filter(
-        name="Egan",
-        full_name="Egan filter (the 'egg')",
-        reference="Egan, Merz & Baldwin, J. Med. Chem. 2000, 43, 3867–3877",
-        description=(
-            "A two-descriptor model of passive intestinal absorption, using lipophilicity and "
-            "polar surface area. These same two axes underlie the BOILED-Egg plot elsewhere in "
-            "this app, though the egg's ellipses differ from this rectangular cut-off. Both "
-            "criteria must be met."
-        ),
-        criteria=[
-            Criterion("LogP (WLOGP)", high=5.88, **LOGP),
-            Criterion("TPSA", high=131.6, **TPSA),
-        ],
-        column="Egan",
-    ),
+    # Egan is deliberately absent: its LogP/TPSA model of passive absorption is
+    # already shown by the BOILED-Egg view, which is built on the same two axes.
     "Muegge": Filter(
         name="Muegge",
         full_name="Muegge filter (pharmacophore point filter)",
