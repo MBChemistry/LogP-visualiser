@@ -53,10 +53,10 @@ with st.sidebar:
                           disabled=not fixed)
     vmax_tpsa = st.slider("TPSA full intensity at contribution (Å²) =", 5.0, 40.0, 25.0, 1.0,
                           disabled=not fixed)
-    sigma, radius, show_h = 0.4, 0.38, False
+    sigma, radius, show_h = 0.4, 0.33, True
     if style == "circles":
-        radius = st.slider("Circle size (× bond length)", 0.25, 0.48, 0.38, 0.02)
-        show_h = st.checkbox("Include hydrogens in labels (e.g. CH₃, OH)", False)
+        radius = st.slider("Circle size (× bond length)", 0.25, 0.48, 0.33, 0.02)
+        show_h = st.checkbox("Include hydrogens in labels (e.g. CH₃, OH)", True)
     else:
         sigma = st.slider("Heatmap spread (× bond length)", 0.2, 0.8, 0.4, 0.05)
     show_values = st.checkbox("Show per-atom values", True)

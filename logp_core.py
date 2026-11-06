@@ -425,10 +425,10 @@ def render_circles(
     result: AtomContribResult,
     size: int = 800,
     vmax: float | None = None,
-    radius: float = 0.38,
+    radius: float = 0.33,
     show_values: bool = True,
     show_indices: bool = False,
-    show_hydrogens: bool = False,
+    show_hydrogens: bool = True,
     highlight_rotatable: bool = False,
     **_ignored,
 ) -> Image.Image:
