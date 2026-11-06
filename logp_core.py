@@ -306,6 +306,34 @@ def colour_scale(result: AtomContribResult, vmax: float | None):
     return CMAP_SEQ, mcolors.Normalize(vmin=0, vmax=vmax, clip=True), vmax
 
 
+# RDKit's "strict" rotatable bond definition, the one CalcNumRotatableBonds counts by default.
+_ROTATABLE_END = ("!$(*#*)&!D1&!$(C(F)(F)F)&!$(C(Cl)(Cl)Cl)&!$(C(Br)(Br)Br)"
+                  "&!$(C([CH3])([CH3])[CH3])")
+_ROTATABLE_BOND = Chem.MolFromSmarts(
+    f"[{_ROTATABLE_END}&!$([CD3](=[N,O,S])-!@[#7,O,S!D1])&!$([#7,O,S!D1]-!@[CD3]=[N,O,S])"
+    f"&!$([CD3](=[N+])-!@[#7!D1])&!$([#7!D1]-!@[CD3]=[N+])]-,:;!@[{_ROTATABLE_END}]"
+)
+ROTATABLE_YELLOW = (1.0, 0.84, 0.0)
+
+
+def rotatable_bonds(mol: Chem.Mol) -> list[int]:
+    """Indices of the bonds counted by CalcNumRotatableBonds."""
+    matches = mol.GetSubstructMatches(_ROTATABLE_BOND, uniquify=False)
+    return sorted({mol.GetBondBetweenAtoms(a, b).GetIdx() for a, b in matches})
+
+
+def _draw_molecule(drawer, mol: Chem.Mol, highlight_rotatable: bool, band_width: int = 6) -> None:
+    """Draw the molecule, optionally with a yellow band under each rotatable bond.
+    band_width is a multiple of the bond line width."""
+    if not highlight_rotatable:
+        drawer.DrawMolecule(mol)
+        return
+    bonds = rotatable_bonds(mol)
+    drawer.drawOptions().highlightBondWidthMultiplier = band_width
+    drawer.DrawMolecule(mol, highlightAtoms=[], highlightBonds=bonds,
+                        highlightBondColors={b: ROTATABLE_YELLOW for b in bonds})
+
+
 def render_heatmap(
     result: AtomContribResult,
     size: int = 800,
@@ -313,6 +341,7 @@ def render_heatmap(
     sigma: float = 0.40,
     show_values: bool = True,
     show_indices: bool = False,
+    highlight_rotatable: bool = False,
 ) -> Image.Image:
     """
     Draw the molecule over a Gaussian heatmap of the atom contributions.
@@ -343,7 +372,7 @@ def render_heatmap(
         for atom, c in zip(mol.GetAtoms(), w):
             if result.info["diverging"] or c > 0:
                 atom.SetProp("atomNote", fmt.format(c))
-    drawer.DrawMolecule(mol)
+    _draw_molecule(drawer, mol, highlight_rotatable)
     drawer.FinishDrawing()
     mol_layer = Image.open(io.BytesIO(drawer.GetDrawingText())).convert("RGBA")
 
@@ -400,6 +429,7 @@ def render_circles(
     show_values: bool = True,
     show_indices: bool = False,
     show_hydrogens: bool = False,
+    highlight_rotatable: bool = False,
     **_ignored,
 ) -> Image.Image:
     """
@@ -435,7 +465,7 @@ def render_circles(
     opts.scaleBondWidth = False
     opts.multipleBondOffset = 0.2
     opts.fixedBondLength = size * 0.11  # stop small molecules being drawn huge
-    drawer.DrawMolecule(mol)
+    _draw_molecule(drawer, mol, highlight_rotatable, band_width=3)
     drawer.FinishDrawing()
     img = Image.open(io.BytesIO(drawer.GetDrawingText())).convert("RGB")
 
@@ -564,7 +594,10 @@ def render_figure(result: AtomContribResult, title: str | None = None,
     ax.axis("off")
     sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
     cb = fig.colorbar(sm, ax=ax, orientation="horizontal", fraction=0.045, pad=0.02)
-    cb.set_label(info["colorbar"])
+    label = info["colorbar"]
+    if kwargs.get("highlight_rotatable"):
+        label += f"\nYellow bonds = rotatable ({len(rotatable_bonds(result.mol))})"
+    cb.set_label(label)
     ax.set_title(title or default_title(result), fontsize=14)
     buf = io.BytesIO()
     fig.savefig(buf, format="png", bbox_inches="tight", facecolor="white")
@@ -625,6 +658,7 @@ if __name__ == "__main__":
     p.add_argument("--vmax", type=float, default=None, help="fixed colour scale (default: per molecule)")
     p.add_argument("--no-values", action="store_true", help="hide per-atom numbers")
     p.add_argument("--style", choices=["circles", "heatmap"], default="circles")
+    p.add_argument("--rotatable", action="store_true", help="highlight rotatable bonds in yellow")
     p.add_argument("--property", choices=["logp", "tpsa"], default="logp")
     p.add_argument("--egg", metavar="PNG", help="also save a BOILED-Egg plot to this file")
     a = p.parse_args()
@@ -637,6 +671,7 @@ if __name__ == "__main__":
 
     res = compute_tpsa_contributions(mol) if a.property == "tpsa" else compute_logp_contributions(mol)
     Path(a.output).write_bytes(render_figure(res, style=a.style, vmax=a.vmax,
+                                              highlight_rotatable=a.rotatable,
                                               show_values=not a.no_values))
     print(f"{res.smiles}  {default_title(res)}  -> {a.output}")
 

@@ -61,6 +61,11 @@ with st.sidebar:
         sigma = st.slider("Heatmap spread (× bond length)", 0.2, 0.8, 0.4, 0.05)
     show_values = st.checkbox("Show per-atom values", True)
     show_indices = st.checkbox("Show atom indices", False)
+    show_rotatable = st.checkbox(
+        "Highlight rotatable bonds (yellow)", False,
+        help="Marks the bonds counted in the Rotatable bonds metric on the LogP and TPSA maps, "
+             "including images in the batch ZIP.",
+    )
     tpsa_sp = st.checkbox(
         "TPSA: include S and P", False,
         help="Ertl's original TPSA counts only N and O. This affects the TPSA map only; "
@@ -69,7 +74,8 @@ with st.sidebar:
     size = st.select_slider("Image resolution", [500, 700, 900, 1200], 900)
 
 RENDER = dict(style=style, size=size, sigma=sigma, radius=radius, show_hydrogens=show_h,
-              show_values=show_values, show_indices=show_indices)
+              show_values=show_values, show_indices=show_indices,
+              highlight_rotatable=show_rotatable)
 
 
 # ---------------- Reusable display pieces ----------------
@@ -86,8 +92,8 @@ HELP = {
             "mean poorer membrane permeation. Used by the BOILED-Egg model.",
     "MW": "Molecular weight: the sum of the average atomic masses, in g/mol. Lipinski's guide "
           "is ≤ 500.",
-    "Fsp3": "Fraction of sp3 carbons: sp3-hybridised carbons ÷ total carbons. Runs from 0 (no "
-            "sp3 carbons, e.g. benzene) to 1 (all sp3, e.g. cyclohexane); higher means a more "
+    "Fsp3": "Fraction of sp³ carbons: sp³-hybridised carbons ÷ total carbons. Runs from 0 (no "
+            "sp³ carbons, e.g. benzene) to 1 (all sp³, e.g. cyclohexane); higher means a more "
             "saturated, three-dimensional molecule. A drug-likeness parameter (Wei et al., "
             "Drug Discov. Today 2020), not a pass/fail rule. Shown as n/a if there is no carbon.",
     "HBD": "Hydrogen-bond donors: the number of OH and NH hydrogens (Lipinski's counting). "
@@ -109,16 +115,16 @@ def show_metrics(summary):
     top[0].metric("LogP (WLOGP)", f"{summary['LogP']:.2f}", help=HELP["LogP"])
     top[1].metric("TPSA", f"{summary['TPSA']:.1f} Å²", help=HELP["TPSA"])
     top[2].metric("Mol. weight", f"{summary['MW']:.1f}", help=HELP["MW"])
-    top[3].metric("Fsp3", fsp3, help=HELP["Fsp3"])
+    top[3].metric("Fsp³", fsp3, help=HELP["Fsp3"])
     bottom[0].metric("H-bond donors", summary["HBD"], help=HELP["HBD"])
     bottom[1].metric("H-bond acceptors", summary["HBA"], help=HELP["HBA"])
     bottom[2].metric("Rotatable bonds", summary["RotB"], help=HELP["RotB"])
 
 
 def summary_download(row, file_stem, key):
-    """All whole-molecule results for one molecule (incl. Fsp3) as a one-row CSV."""
+    """All whole-molecule results for one molecule (incl. Fsp³) as a one-row CSV."""
     st.download_button("Download molecule results (CSV)",
-                       pd.DataFrame([row]).to_csv(index=False),
+                       pd.DataFrame([row]).to_csv(index=False).encode("utf-8-sig"),
                        file_name=f"{file_stem}_results.csv", key=f"summary_{key}")
 
 
@@ -151,7 +157,7 @@ def show_ro5(summary, key):
             "Wildman–Crippen (Lipinski originally used MLogP); donors/acceptors use Lipinski's "
             "counting (OH + NH; N + O)."
         )
-        st.download_button("Download Lipinski table (CSV)", ro5_df.to_csv(index=False),
+        st.download_button("Download Lipinski table (CSV)", ro5_df.to_csv(index=False).encode("utf-8-sig"),
                            file_name=f"{key}_lipinski_ro5.csv", key=f"ro5dl_{key}")
 
 
@@ -196,7 +202,7 @@ def show_combined_atom_table(mol, file_stem, key):
         .format({core.LOGP_COL: "{:+.3f}", core.TPSA_COL: "{:.2f}"}),
         hide_index=True, width="stretch", height=400, key=f"atoms_{key}",
     )
-    st.download_button("Download LogP + TPSA per-atom CSV", df.to_csv(index=False),
+    st.download_button("Download LogP + TPSA per-atom CSV", df.to_csv(index=False).encode("utf-8-sig"),
                        file_name=f"{file_stem}_atom_contributions.csv", key=f"csv_{key}")
     st.caption(f"Totals: LogP = {sum(logp_res.contributions):.2f}, "
                f"TPSA = {sum(tpsa_res.contributions):.1f} Å² (sums of the per-atom values).")
@@ -317,7 +323,7 @@ def single_mode():
             "GI absorption": "High" if pred["hia"] else "Low",
             "BBB permeant": "Yes" if pred["bbb"] else "No",
         }])
-        st.download_button("Download BOILED-Egg values (CSV)", egg_row.to_csv(index=False),
+        st.download_button("Download BOILED-Egg values (CSV)", egg_row.to_csv(index=False).encode("utf-8-sig"),
                            file_name="boiled_egg_values.csv", key="single_egg_csv")
         st.markdown(EGG_LEGEND)
         st.caption(EGG_REF)
@@ -396,12 +402,12 @@ def batch_mode():
     df = pd.DataFrame(rows).drop(columns=["Egg region"])
     st.dataframe(
         df.style.map(_pass_fail_style, subset=["Lipinski Ro5", "GI absorption", "BBB permeant"])
-        .format({"MW": "{:.1f}", "LogP (WLOGP)": "{:.2f}", "TPSA (Å²)": "{:.1f}", "Fsp3": "{:.2f}"},
+        .format({"MW": "{:.1f}", "LogP (WLOGP)": "{:.2f}", "TPSA (Å²)": "{:.1f}", "Fsp³": "{:.2f}"},
                 na_rep="n/a"),
         hide_index=True, width="stretch", key="batch_table",
         column_config={col: st.column_config.Column(help=HELP[k]) for col, k in {
             "MW": "MW", "LogP (WLOGP)": "LogP", "TPSA (Å²)": "TPSA", "HBD": "HBD", "HBA": "HBA",
-            "Rotatable bonds": "RotB", "Fsp3": "Fsp3", "GI absorption": "GI", "BBB permeant": "BBB",
+            "Rotatable bonds": "RotB", "Fsp³": "Fsp3", "GI absorption": "GI", "BBB permeant": "BBB",
         }.items()},
     )
     n_ro5 = sum(r["Lipinski Ro5"] == "Pass" for r in rows)
@@ -411,11 +417,11 @@ def batch_mode():
                f"BBB permeant: {n_bbb}/{len(rows)}")
 
     d1, d2, d3 = st.columns(3)
-    d1.download_button("Download results table (CSV)", df.to_csv(index=False),
+    d1.download_button("Download results table (CSV)", df.to_csv(index=False).encode("utf-8-sig"),
                        file_name="batch_results.csv", key="batch_csv")
     d2.download_button(
         "Download per-atom LogP + TPSA, all compounds (CSV)",
-        pd.DataFrame(_atom_rows(tuple(data), tpsa_sp)).to_csv(index=False),
+        pd.DataFrame(_atom_rows(tuple(data), tpsa_sp)).to_csv(index=False).encode("utf-8-sig"),
         file_name="all_compounds_atom_contributions.csv", key="batch_atoms_csv",
         help="One file, one row per atom: compound number, name, atom, LogP and TPSA contribution.",
     )
@@ -427,7 +433,7 @@ def batch_mode():
         if cached is None or cached[0] != sig:  # none yet, or display options changed
             if st.button("Prepare ZIP of all results and images", key="make_zip",
                          help="Per compound: LogP and TPSA maps (current display settings), results "
-                              "summary (incl. Fsp3), per-atom CSV, Lipinski table and BOILED-Egg "
+                              "summary (incl. Fsp³), per-atom CSV, Lipinski table and BOILED-Egg "
                               "plot. Plus the summary table and an all-compounds BOILED-Egg."):
                 bar = st.progress(0.0, text="Rendering compounds…")
                 zbytes = batch.build_zip(
@@ -486,7 +492,7 @@ def batch_mode():
                      .map(_pass_fail_style, subset=["GI absorption", "BBB permeant"])
                      .format({"LogP (WLOGP)": "{:.2f}", "TPSA (Å²)": "{:.1f}"}),
                      hide_index=True, width="stretch", key="egg_table")
-        st.download_button("Download BOILED-Egg table (CSV)", egg_df.to_csv(index=False),
+        st.download_button("Download BOILED-Egg table (CSV)", egg_df.to_csv(index=False).encode("utf-8-sig"),
                            file_name="boiled_egg_table.csv", key="egg_table_dl")
         st.markdown(EGG_LEGEND)
         st.caption(EGG_REF)

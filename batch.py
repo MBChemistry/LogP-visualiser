@@ -59,7 +59,7 @@ def analyse(cpd: Compound) -> dict:
         "HBD": s["HBD"],
         "HBA": s["HBA"],
         "Rotatable bonds": s["RotB"],
-        "Fsp3": None if s["Fsp3"] is None else round(s["Fsp3"], 3),
+        "Fsp³": None if s["Fsp3"] is None else round(s["Fsp3"], 3),
         "Ro5 violations": ro5["violations"],
         "Lipinski Ro5": "Pass" if ro5["pass"] else "Fail",
         "GI absorption": "High" if egg["hia"] else "Low",
@@ -94,6 +94,7 @@ def _csv(rows: list[dict]) -> str:
     if not rows:
         return ""
     buf = io.StringIO()
+    buf.write("﻿")  # BOM, so Excel reads Fsp³ and Å² correctly
     w = csv.DictWriter(buf, fieldnames=list(rows[0].keys()))
     w.writeheader()
     w.writerows(rows)
@@ -114,7 +115,7 @@ def build_zip(compounds: list[Compound], rows: list[dict], render_kwargs: dict,
       boiled_egg_table.csv
       boiled_egg_all_compounds.png
       cpd_001_<name>/  logp_map.png, tpsa_map.png, atom_contributions.csv (LogP + TPSA),
-                       summary.csv (all whole-molecule results, incl. Fsp3),
+                       summary.csv (all whole-molecule results, incl. Fsp³),
                        lipinski_ro5.csv, boiled_egg.png
     `render_kwargs` are passed to core.render_figure (style, size, ...). Use
     'vmax_logp' / 'vmax_tpsa' keys for the fixed colour scales (None = relative).
