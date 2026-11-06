@@ -12,6 +12,7 @@ from streamlit_ketcher import st_ketcher
 
 import batch
 import boiled_egg
+import druglikeness
 import logp_core as core
 
 RDLogger.DisableLog("rdApp.*")  # bad SMILES are reported in the UI instead
@@ -136,29 +137,42 @@ def _pass_fail_style(v):
     return ""
 
 
-def show_ro5(summary, key):
-    ro5_rows, ro5 = core.lipinski_rule_of_five(summary)
-    verdict = "PASS" if ro5["pass"] else "FAIL"
-    with st.expander(f"Lipinski's rule of five: **{verdict}** ({plural(ro5['violations'], 'violation')})",
-                     expanded=True):
-        ro5_df = pd.DataFrame(ro5_rows + [{
-            "Property": "Overall (≤ 1 violation allowed)",
-            "Value": plural(ro5["violations"], "violation"),
-            "Rule": "≤ 1 violation",
-            "Result": "Pass" if ro5["pass"] else "Fail",
-        }])
-        styled = (ro5_df.style.map(_pass_fail_style, subset=["Result"])
-                  .apply(lambda r: ["font-weight: 700; border-top: 2px solid #888"] * len(r)
-                         if r.name == len(ro5_df) - 1 else [""] * len(r), axis=1))
-        st.dataframe(styled, hide_index=True, width="stretch", key=f"ro5_{key}")
-        st.caption(
-            "Lipinski et al. (1997): poor oral absorption is more likely when **more than one** rule "
-            "is broken, so a molecule passes overall with at most one violation. LogP here is "
-            "Wildman–Crippen (Lipinski originally used MLogP); donors/acceptors use Lipinski's "
-            "counting (OH + NH; N + O)."
+def show_filters(mol, summary, key):
+    """Druglikeness filters: a dropdown of filters, each with its criteria table."""
+    desc = druglikeness.filter_descriptors(mol, summary)
+    overalls = druglikeness.evaluate_all(desc)
+    n_pass = sum(o["pass"] for o in overalls.values())
+
+    with st.expander(f"Druglikeness filters: **{n_pass}/{len(overalls)} passed**", expanded=True):
+        chips = "   ·   ".join(
+            f"{'✅' if o['pass'] else '❌'} {n}" for n, o in overalls.items())
+        st.markdown(chips)
+        name = st.selectbox(
+            "Filter", druglikeness.FILTER_NAMES, key=f"filter_{key}",
+            format_func=lambda n: f"{druglikeness.FILTERS[n].full_name} — "
+                                  f"{'Pass' if overalls[n]['pass'] else 'Fail'}",
+            help="Each filter is a published rule of thumb for oral druglikeness. "
+                 "Choosing one shows its criteria and this molecule's values.",
         )
-        st.download_button("Download Lipinski table (CSV)", ro5_df.to_csv(index=False).encode("utf-8-sig"),
-                           file_name=f"{key}_lipinski_ro5.csv", key=f"ro5dl_{key}")
+        f = druglikeness.FILTERS[name]
+        st.markdown(f.description)
+
+        rows = druglikeness.table_rows(name, desc)
+        df = pd.DataFrame(rows)
+        styled = (df.style.map(_pass_fail_style, subset=["Result"])
+                  .apply(lambda r: ["font-weight: 700; border-top: 2px solid #888"] * len(r)
+                         if r.name == len(df) - 1 else [""] * len(r), axis=1))
+        st.dataframe(styled, hide_index=True, width="stretch", key=f"filt_{key}_{name}")
+        st.caption(f"{f.reference}." + (f" {f.notes}" if f.notes else ""))
+
+        d1, d2 = st.columns(2)
+        d1.download_button(f"Download {f.name} table (CSV)",
+                           df.to_csv(index=False).encode("utf-8-sig"),
+                           file_name=f"{key}_{f.name.lower()}.csv", key=f"filtdl_{key}_{name}")
+        d2.download_button("Download all filters (CSV)",
+                           pd.DataFrame(druglikeness.all_tables_rows(desc))
+                           .to_csv(index=False).encode("utf-8-sig"),
+                           file_name=f"{key}_druglikeness_filters.csv", key=f"filtall_{key}")
 
 
 def show_atom_map(mol, view, title_prefix, file_stem, key):
@@ -290,7 +304,7 @@ def single_mode():
     single_row = batch.analyse(batch.Compound(1, name or "", Chem.MolToSmiles(mol)))
     single_row.pop("Cpd")
     summary_download(single_row, "molecule", key="single")
-    show_ro5(summary, key="single")
+    show_filters(mol, summary, key="single")
 
     view = st.segmented_control(
         "Visualise", ["LogP", "TPSA", "BOILED-Egg"], default="LogP", key="view",
@@ -342,6 +356,12 @@ def _results(smiles_and_names: tuple) -> list[dict]:
 def _atom_rows(smiles_and_names: tuple, include_sp: bool) -> list[dict]:
     cpds = [batch.Compound(i + 1, n, s) for i, (s, n) in enumerate(smiles_and_names)]
     return batch.all_atom_rows(cpds, include_s_and_p=include_sp)
+
+
+@st.cache_data(show_spinner=False)
+def _filter_rows(smiles_and_names: tuple) -> list[dict]:
+    cpds = [batch.Compound(i + 1, n, s) for i, (s, n) in enumerate(smiles_and_names)]
+    return batch.all_filter_rows(cpds)
 
 
 def batch_mode():
@@ -401,7 +421,8 @@ def batch_mode():
     st.subheader("Results")
     df = pd.DataFrame(rows).drop(columns=["Egg region"])
     st.dataframe(
-        df.style.map(_pass_fail_style, subset=["Lipinski Ro5", "GI absorption", "BBB permeant"])
+        df.style.map(_pass_fail_style,
+                     subset=batch.FILTER_COLUMNS + ["GI absorption", "BBB permeant"])
         .format({"MW": "{:.1f}", "LogP (WLOGP)": "{:.2f}", "TPSA (Å²)": "{:.1f}", "Fsp³": "{:.2f}"},
                 na_rep="n/a"),
         hide_index=True, width="stretch", key="batch_table",
@@ -410,13 +431,14 @@ def batch_mode():
             "Rotatable bonds": "RotB", "Fsp³": "Fsp3", "GI absorption": "GI", "BBB permeant": "BBB",
         }.items()},
     )
-    n_ro5 = sum(r["Lipinski Ro5"] == "Pass" for r in rows)
-    n_gi = sum(r["GI absorption"] == "High" for r in rows)
-    n_bbb = sum(r["BBB permeant"] == "Yes" for r in rows)
-    st.caption(f"Lipinski pass: {n_ro5}/{len(rows)}   ·   High GI absorption: {n_gi}/{len(rows)}   ·   "
-               f"BBB permeant: {n_bbb}/{len(rows)}")
+    n = len(rows)
+    counts = "   ·   ".join(f"{c}: {sum(r[c] == 'Pass' for r in rows)}/{n}"
+                            for c in batch.FILTER_COLUMNS)
+    st.caption(f"{counts}   ·   High GI absorption: "
+               f"{sum(r['GI absorption'] == 'High' for r in rows)}/{n}   ·   BBB permeant: "
+               f"{sum(r['BBB permeant'] == 'Yes' for r in rows)}/{n}")
 
-    d1, d2, d3 = st.columns(3)
+    d1, d2, d3, d4 = st.columns(4)
     d1.download_button("Download results table (CSV)", df.to_csv(index=False).encode("utf-8-sig"),
                        file_name="batch_results.csv", key="batch_csv")
     d2.download_button(
@@ -425,7 +447,13 @@ def batch_mode():
         file_name="all_compounds_atom_contributions.csv", key="batch_atoms_csv",
         help="One file, one row per atom: compound number, name, atom, LogP and TPSA contribution.",
     )
-    with d3:
+    d3.download_button(
+        "Download druglikeness filters, all compounds (CSV)",
+        pd.DataFrame(_filter_rows(tuple(data))).to_csv(index=False).encode("utf-8-sig"),
+        file_name="all_compounds_druglikeness_filters.csv", key="batch_filters_csv",
+        help="Every criterion of all five filters, for every compound.",
+    )
+    with d4:
         kw = dict(RENDER, vmax_logp=vmax_logp if fixed else None,
                   vmax_tpsa=vmax_tpsa if fixed else None)
         sig = repr((sorted(kw.items()), tpsa_sp, tuple(data)))
@@ -433,7 +461,7 @@ def batch_mode():
         if cached is None or cached[0] != sig:  # none yet, or display options changed
             if st.button("Prepare ZIP of all results and images", key="make_zip",
                          help="Per compound: LogP and TPSA maps (current display settings), results "
-                              "summary (incl. Fsp³), per-atom CSV, Lipinski table and BOILED-Egg "
+                              "summary (incl. Fsp³), per-atom CSV, druglikeness filters and BOILED-Egg "
                               "plot. Plus the summary table and an all-compounds BOILED-Egg."):
                 bar = st.progress(0.0, text="Rendering compounds…")
                 zbytes = batch.build_zip(
@@ -462,7 +490,7 @@ def batch_mode():
     summary = core.molecule_summary(mol)
     show_metrics(summary)
     summary_download(rows[cpd.number - 1], f"cpd{cpd.number:03d}", key=f"cpd{cpd.number}")
-    show_ro5(summary, key=f"cpd{cpd.number:03d}")
+    show_filters(mol, summary, key=f"cpd{cpd.number:03d}")
 
     view = st.segmented_control(
         "Visualise", ["LogP", "TPSA", "BOILED-Egg"], default="LogP", key="batch_view",
