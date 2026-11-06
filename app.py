@@ -103,6 +103,16 @@ HELP = {
            "Lipinski's guide is ≤ 10.",
     "RotB": "Rotatable bonds: single bonds that can rotate freely, excluding ring and terminal "
             "bonds. A measure of molecular flexibility.",
+    "MR": "Molar refractivity: a measure of size and polarisability, in cm³/mol, from the "
+          "Wildman–Crippen atom contributions. Used by the Ghose filter, which asks for 40–130.",
+    "Atoms": "Total atom count, hydrogens included. Used by the Ghose filter, which asks for "
+             "20–70. (The maps show heavy atoms only.)",
+    "Rings": "Number of rings (the smallest set of smallest rings). Used by the Muegge filter, "
+             "which allows at most 7.",
+    "Carbons": "Number of carbon atoms. Used by the Muegge filter, which asks for more than 4, "
+               "so that a molecule has a real carbon skeleton.",
+    "Heteroatoms": "Number of atoms that are not carbon or hydrogen. Used by the Muegge filter, "
+                   "which asks for more than 1, so that a molecule has some polar character.",
     "GI": "Predicted passive absorption from the gastrointestinal tract. High if the molecule "
           "falls in the white or yolk of the BOILED-Egg plot.",
     "BBB": "Predicted passive permeation of the blood–brain barrier. Yes if the molecule falls "
@@ -110,16 +120,26 @@ HELP = {
 }
 
 
-def show_metrics(summary):
-    fsp3 = "n/a" if summary["Fsp3"] is None else f"{summary['Fsp3']:.2f}"
-    top, bottom = st.columns(4), st.columns(4)
-    top[0].metric("LogP (WLOGP)", f"{summary['LogP']:.2f}", help=HELP["LogP"])
-    top[1].metric("TPSA", f"{summary['TPSA']:.1f} Å²", help=HELP["TPSA"])
-    top[2].metric("Mol. weight", f"{summary['MW']:.1f}", help=HELP["MW"])
-    top[3].metric("Fsp³", fsp3, help=HELP["Fsp3"])
-    bottom[0].metric("H-bond donors", summary["HBD"], help=HELP["HBD"])
-    bottom[1].metric("H-bond acceptors", summary["HBA"], help=HELP["HBA"])
-    bottom[2].metric("Rotatable bonds", summary["RotB"], help=HELP["RotB"])
+def show_metrics(desc):
+    """Every calculated descriptor, in rows of three (labels truncate at four)."""
+    tiles = [
+        ("LogP (WLOGP)", f"{desc['LogP']:.2f}", "LogP"),
+        ("TPSA", f"{desc['TPSA']:.1f} Å²", "TPSA"),
+        ("Mol. weight", f"{desc['MW']:.1f}", "MW"),
+        ("Fsp³", "n/a" if desc["Fsp3"] is None else f"{desc['Fsp3']:.2f}", "Fsp3"),
+        ("H-bond donors", desc["HBD"], "HBD"),
+        ("H-bond acceptors", desc["HBA"], "HBA"),
+        ("Rotatable bonds", desc["RotB"], "RotB"),
+        ("Molar refractivity", f"{desc['MR']:.1f}", "MR"),
+        ("Atoms (incl. H)", desc["Atoms"], "Atoms"),
+        ("Rings", desc["Rings"], "Rings"),
+        ("Carbon atoms", desc["Carbons"], "Carbons"),
+        ("Heteroatoms", desc["Heteroatoms"], "Heteroatoms"),
+    ]
+    for start in range(0, len(tiles), 3):
+        cols = st.columns(3)
+        for col, (label, value, key) in zip(cols, tiles[start:start + 3]):
+            col.metric(label, value, help=HELP[key])
 
 
 def summary_download(row, file_stem, key):
@@ -137,9 +157,8 @@ def _pass_fail_style(v):
     return ""
 
 
-def show_filters(mol, summary, key):
+def show_filters(desc, key):
     """Druglikeness filters: a dropdown of filters, each with its criteria table."""
-    desc = druglikeness.filter_descriptors(mol, summary)
     overalls = druglikeness.evaluate_all(desc)
     n_pass = sum(o["pass"] for o in overalls.values())
 
@@ -163,9 +182,7 @@ def show_filters(mol, summary, key):
                   .apply(lambda r: ["font-weight: 700; border-top: 2px solid #888"] * len(r)
                          if r.name == len(df) - 1 else [""] * len(r), axis=1))
         st.dataframe(styled, hide_index=True, width="stretch", key=f"filt_{key}_{name}")
-        st.caption(f"{f.reference}." + (f" {f.notes}" if f.notes else "") +
-                   " Egan's filter is not listed: the BOILED-Egg view covers the same "
-                   "LogP/TPSA model of passive absorption.")
+        st.caption(f"{f.reference}." + (f" {f.notes}" if f.notes else ""))
 
         d1, d2 = st.columns(2)
         d1.download_button(f"Download {f.name} table (CSV)",
@@ -302,11 +319,12 @@ def single_mode():
         return
 
     summary = core.molecule_summary(mol)
-    show_metrics(summary)
+    desc = druglikeness.filter_descriptors(mol, summary)
+    show_metrics(desc)
     single_row = batch.analyse(batch.Compound(1, name or "", Chem.MolToSmiles(mol)))
     single_row.pop("Cpd")
     summary_download(single_row, "molecule", key="single")
-    show_filters(mol, summary, key="single")
+    show_filters(desc, key="single")
 
     view = st.segmented_control(
         "Visualise", ["LogP", "TPSA", "BOILED-Egg"], default="LogP", key="view",
@@ -489,10 +507,10 @@ def batch_mode():
     cpd = compounds[num - 1]
     mol = cpd.mol
     st.markdown(f"### {cpd.label}")
-    summary = core.molecule_summary(mol)
-    show_metrics(summary)
+    desc = druglikeness.filter_descriptors(mol, core.molecule_summary(mol))
+    show_metrics(desc)
     summary_download(rows[cpd.number - 1], f"cpd{cpd.number:03d}", key=f"cpd{cpd.number}")
-    show_filters(mol, summary, key=f"cpd{cpd.number:03d}")
+    show_filters(desc, key=f"cpd{cpd.number:03d}")
 
     view = st.segmented_control(
         "Visualise", ["LogP", "TPSA", "BOILED-Egg"], default="LogP", key="batch_view",
