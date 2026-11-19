@@ -17,7 +17,7 @@ import logp_core as core
 
 RDLogger.DisableLog("rdApp.*")  # bad SMILES are reported in the UI instead
 
-st.set_page_config(page_title="LogP & TPSA Visualiser", page_icon="🧪", layout="wide")
+st.set_page_config(page_title="LogP & TPSA Visualiser", page_icon=":material/science:", layout="wide")
 st.title("LogP & TPSA atom-contribution visualiser")
 st.caption(
     "Per-atom contributions to **Wildman–Crippen LogP** (lipophilicity) and **Ertl TPSA** "
@@ -164,7 +164,8 @@ def show_filters(desc, key):
 
     with st.expander(f"Druglikeness filters: **{n_pass}/{len(overalls)} passed**", expanded=True):
         chips = "   ·   ".join(
-            f"{'✅' if o['pass'] else '❌'} {n}" for n, o in overalls.items())
+            f"{':green[:material/check_circle:]' if o['pass'] else ':red[:material/cancel:]'} {n}"
+            for n, o in overalls.items())
         st.markdown(chips)
         name = st.selectbox(
             "Filter", druglikeness.FILTER_NAMES, key=f"filter_{key}",
@@ -259,7 +260,8 @@ EGG_REF = (
 def single_mode():
     mol = None
     name = None
-    tab_draw, tab_text, tab_file = st.tabs(["✏️ Draw", "⌨️ SMILES / InChI", "📁 Upload file"])
+    tab_draw, tab_text, tab_file = st.tabs([":material/draw: Draw", ":material/keyboard: SMILES / InChI",
+                                          ":material/upload_file: Upload file"])
 
     with tab_text:
         ex = st.selectbox("Example molecules", ["—"] + list(EXAMPLES))
@@ -386,7 +388,8 @@ def _filter_rows(smiles_and_names: tuple) -> list[dict]:
 
 def batch_mode():
     st.subheader("Batch analysis")
-    tab_paste, tab_file = st.tabs(["⌨️ Paste SMILES list", "📁 Upload file"])
+    tab_paste, tab_file = st.tabs([":material/format_list_bulleted: Paste SMILES list",
+                                  ":material/upload_file: Upload file"])
     with tab_paste:
         pasted = st.text_area(
             "One molecule per line: `SMILES` optionally followed by a name",

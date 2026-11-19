@@ -43,23 +43,24 @@ def predict(wlogp: float, tpsa: float) -> dict:
 
 
 def _outline(e: dict, n: int = 400) -> np.ndarray:
-    """Ellipse boundary as (WLOGP, TPSA) points for plotting (x = WLOGP)."""
+    """Ellipse boundary as (TPSA, WLOGP) points for plotting (x = TPSA, y = WLOGP)."""
     s = np.linspace(0, 2 * np.pi, n)
     t = np.radians(e["angle"])
     u, v = e["a"] / 2 * np.cos(s), e["b"] / 2 * np.sin(s)
     tpsa = e["cx"] + u * np.cos(t) - v * np.sin(t)
     wlogp = e["cy"] + u * np.sin(t) + v * np.cos(t)
-    return np.column_stack([wlogp, tpsa])
+    return np.column_stack([tpsa, wlogp])
 
 
 REGION_COLOUR = {"yolk": "#c0392b", "white": "#1f4fbf", "grey": "#222222"}
 
 
-def _egg_axes(xs, ys, figsize=(7, 5.6)):
-    """Figure with the grey background, white and yolk drawn; limits fit all points."""
+def _egg_axes(tpsas, wlogps, figsize=(7, 5.6)):
+    """Figure with the grey background, white and yolk drawn; limits fit all points.
+    x = TPSA, y = WLOGP, as in Daina & Zoete's published plot."""
     fig, ax = plt.subplots(figsize=figsize, dpi=150)
-    xmin, xmax = min([-4.0] + [x - 0.8 for x in xs]), max([8.0] + [x + 0.8 for x in xs])
-    ymin, ymax = min([-10.0] + [y - 10 for y in ys]), max([200.0] + [y + 15 for y in ys])
+    xmin, xmax = min([-10.0] + [x - 10 for x in tpsas]), max([200.0] + [x + 15 for x in tpsas])
+    ymin, ymax = min([-4.0] + [y - 0.8 for y in wlogps]), max([8.0] + [y + 0.8 for y in wlogps])
     ax.set_facecolor("#c8c8c8")  # grey: outside both regions
     ax.add_patch(Polygon(_outline(WHITE), closed=True, facecolor="white",
                          edgecolor="#9a9a9a", lw=1.2, label="HIA (white)"))
@@ -67,8 +68,8 @@ def _egg_axes(xs, ys, figsize=(7, 5.6)):
                          edgecolor="#d9a400", lw=1.2, label="BBB (yolk)"))
     ax.set_xlim(xmin, xmax)
     ax.set_ylim(ymin, ymax)
-    ax.set_xlabel("WLOGP  (Wildman–Crippen LogP)")
-    ax.set_ylabel("TPSA (Å²)")
+    ax.set_xlabel("TPSA (Å²)")
+    ax.set_ylabel("WLOGP  (Wildman–Crippen LogP)")
     ax.grid(alpha=0.25, color="white")
     return fig, ax
 
@@ -83,12 +84,12 @@ def _png(fig) -> bytes:
 def plot(wlogp: float, tpsa: float, label: str | None = None) -> bytes:
     """BOILED-Egg plot with one molecule marked and labelled; returns PNG bytes."""
     pred = predict(wlogp, tpsa)
-    fig, ax = _egg_axes([wlogp], [tpsa])
+    fig, ax = _egg_axes([tpsa], [wlogp])
 
-    ax.scatter([wlogp], [tpsa], s=120, c=REGION_COLOUR[pred["region"]],
+    ax.scatter([tpsa], [wlogp], s=120, c=REGION_COLOUR[pred["region"]],
                edgecolors="black", linewidths=1.2, zorder=5)
     txt = label if label else "Input molecule"
-    ax.annotate(f"{txt}\n(WLOGP {wlogp:.2f}, TPSA {tpsa:.1f} Å²)", (wlogp, tpsa),
+    ax.annotate(f"{txt}\n(WLOGP {wlogp:.2f}, TPSA {tpsa:.1f} Å²)", (tpsa, wlogp),
                 xytext=(12, 12), textcoords="offset points", fontsize=9, zorder=6,
                 bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="#888", alpha=0.9))
     ax.set_title(
@@ -109,21 +110,19 @@ def plot_many(points: list[tuple[int, float, float]], highlight: int | None = No
     """
     from matplotlib.lines import Line2D
 
-    xs = [p[1] for p in points]
-    ys = [p[2] for p in points]
-    fig, ax = _egg_axes(xs, ys, figsize=(8, 6.4))
+    fig, ax = _egg_axes([p[2] for p in points], [p[1] for p in points], figsize=(8, 6.4))
 
     n_digits = max((len(str(p[0])) for p in points), default=1)
     size = {1: 230, 2: 300, 3: 420}.get(n_digits, 520)
     font = {1: 8, 2: 7.5, 3: 7}.get(n_digits, 6.5)
 
-    for num, x, y in points:
-        region = predict(x, y)["region"]
+    for num, wlogp, tpsa in points:
+        region = predict(wlogp, tpsa)["region"]
         hl = highlight is not None and num == highlight
-        ax.scatter([x], [y], s=size * (1.35 if hl else 1), c=REGION_COLOUR[region],
+        ax.scatter([tpsa], [wlogp], s=size * (1.35 if hl else 1), c=REGION_COLOUR[region],
                    edgecolors="#ffd400" if hl else "black", linewidths=3 if hl else 1,
                    zorder=6 if hl else 5, alpha=0.95)
-        ax.text(x, y, str(num), ha="center", va="center", fontsize=font, fontweight="bold",
+        ax.text(tpsa, wlogp, str(num), ha="center", va="center", fontsize=font, fontweight="bold",
                 color="white", zorder=7)
 
     handles = [
