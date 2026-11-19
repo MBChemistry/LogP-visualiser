@@ -20,6 +20,8 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 from matplotlib.patches import Polygon  # noqa: E402
 
+from watermark import add_watermark  # noqa: E402
+
 #            centre (TPSA, WLOGP)   axes (TPSA, WLOGP)   angle (deg)
 WHITE = dict(cx=71.051, cy=2.292, a=142.081, b=8.740, angle=-1.031325)
 YOLK = dict(cx=38.117, cy=3.177, a=82.061, b=5.557, angle=-0.171887)
@@ -75,6 +77,7 @@ def _egg_axes(tpsas, wlogps, figsize=(7, 5.6)):
 
 
 def _png(fig) -> bytes:
+    add_watermark(fig)
     buf = io.BytesIO()
     fig.savefig(buf, format="png", bbox_inches="tight", facecolor="white")
     plt.close(fig)

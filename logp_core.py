@@ -586,6 +586,9 @@ def render_figure(result: AtomContribResult, title: str | None = None,
     cb.set_label(label)
     ax.set_title(title or default_title(result), fontsize=14)
     buf = io.BytesIO()
+    from watermark import add_watermark
+
+    add_watermark(fig)
     fig.savefig(buf, format="png", bbox_inches="tight", facecolor="white")
     plt.close(fig)
     return buf.getvalue()
